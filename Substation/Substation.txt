@@ -1,0 +1,16 @@
+Substation Fault Currents
+
+Substation maximum fault
+SLG Fault: 1610.15A
+3PH Fault: 2075.95A
+
+Circuit 1 Fault Currents
+Interstate Recloser maximum fault
+SLG Fault: 923.63A
+3PH Fault: 1267.13A
+US Route Recloser maximum fault
+SLG Fault: 434.44A
+3PH Fault: 616.39A
+Circuit 1 end of line calculations
+Max SLG: 226.46A
+Min SLG: 194.58A
