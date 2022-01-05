@@ -1,0 +1,18 @@
+All Assemblies taken from RUS specifications or from In-House standards
+
+Assumptions:
+	Post	Pin	Spool
+15kV	12"	4"+5"	1-1/16"
+25kV	14"	5"+5"	1-1/2"
+35kV	16"	7.5"+5"
+46kV	20"	7.5"+5"
+69kV	26"	7.5"+5"
+
+GMD Calculation Matrix
+[AB,BC,AC],[AN,BN.CN],[AN2,BN2,CN2],[AN3,BN3,CN3],[NN2,N2N3,N1N3],
+[A2B2,B2C2,A2C2],[A2N,B2N,C2N],[A2N2,B2N2,C2N2],[A2N3,B2N3,C2N3],
+[AA2,BA2,CA2],[AB2,BB2,CB2],[AC2,BC2,CC2],
+[A3B3,B3C3,A3C3],[A3N,B3N,C3N],[A3N2,B3N2,C3N2],[A3N3,B3N3,C3N3],
+[AA3,BA3,CA3],[AB3,BB3,CB3],[AC3,BC3,CC3],
+[A2A3,B2A3,C2A3],[A2B3,B2B3,C2B3],[A2C3,B2C3,C2C3],
+[#Phases,#Ground,reserved]

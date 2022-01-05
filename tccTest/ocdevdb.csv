@@ -1,0 +1,3 @@
+StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,ShowPlot,PlotLabel
+1000,1000-RCL,U3,0.170,1000,2,0,0,1,170A
+1001,1001-RCL,U3,0.140,1000,5,0,0,1,140A

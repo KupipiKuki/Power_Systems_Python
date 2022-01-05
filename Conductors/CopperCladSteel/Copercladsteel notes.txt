@@ -1,0 +1,2 @@
+Amperage and GMR missing
+listed strength is in lbf and needs to be lb

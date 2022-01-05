@@ -1,0 +1,20 @@
+'Treatment Group','Treatment Type','Name','Species','Fiber Strength psi'
+'Treatment A','Air Seasoned','Cedar, Western Red','Thuja Plicata',6000
+'Treatment A','Air Seasoned','Cedar, Alaska Yellow','Chamaecyparis Nootkatensis',7400
+'Treatment B','Boulton Drying','Douglas-Fir','Pseudotsuga Menziesii',8000
+'Treatment B','Boulton Drying','Larch, Western','Larix Occidentalis',8400
+'Treatment C','Steam Conditioned','Pine, Southern Loblolly','Pinus Taeda', 8000
+'Treatment C','Steam Conditioned','Pine, Southern Longleaf','Pinus Palustris', 8000
+'Treatment C','Steam Conditioned','Pine, Southern Shortleaf','Pinus Echinata', 8000
+'Treatment C','Steam Conditioned','Pine, Southern Slash','Pinus Elliottii', 8000
+'Treatment D','Kiln Drying','Cedar, Western Red','Thuja Plicata',6000
+'Treatment D','Kiln Drying','Douglas-Fir','Pseudotsuga Menziesii',8000
+'Treatment D','Kiln Drying','Larch, Western','Larix Occidentalis',8400
+'Treatment D','Kiln Drying','Pine, Jack','Pinus Banksiana',6600
+'Treatment D','Kiln Drying','Pine, Lodgepole','Pinus Contorta',6600
+'Treatment D','Kiln Drying','Pine, Ponderosa','Pinus Ponderosa',6600
+'Treatment D','Kiln Drying','Pine, Red','Pinus Resinosa',6600
+'Treatment D','Kiln Drying','Pine, Southern Loblolly','Pinus Taeda', 8000
+'Treatment D','Kiln Drying','Pine, Southern Longleaf','Pinus Palustris', 8000
+'Treatment D','Kiln Drying','Pine, Southern Shortleaf','Pinus Echinata', 8000
+'Treatment D','Kiln Drying','Pine, Southern Slash','Pinus Elliottii', 8000
