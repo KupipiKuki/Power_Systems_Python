@@ -44,8 +44,9 @@ class faultCalculationClass():
         aac=pd.read_csv('./Conductors/AAC.csv')
         copper=pd.read_csv('./Conductors/COPPER.csv')
         copperweld=pd.read_csv('./Conductors/COPPERWELD40.csv')
+        copperweldcopper=pd.read_csv('./Conductors/COPPERWELDCOPPER.csv')
         triplex=pd.read_csv('./Conductors/TRIPLEX.csv')
-        self.conductordb=pd.concat([acsr,aaac,aac,copper,copperweld,triplex],keys=['ACSR','AAAC','AAC','Copper','Copperweld','Triplex'])
+        self.conductordb=pd.concat([acsr,aaac,aac,copper,copperweld,copperweldcopper,triplex],keys=['ACSR','AAAC','AAC','Copper','Copperweld','CopperweldCopper','Triplex'])
         
         self.curvedb = pd.read_csv('./curves/curvedb.csv',dtype={'CurveRef' : str, 'CurveRefAlt1' : str, 'CurveRefAlt2' : str, 'CurveFile' : str})
         
@@ -315,12 +316,16 @@ class faultCalculationClass():
             #Check to see if there is a valid entry in the Conductor Span, if not use the SPan data from the Pole List
             if tfn.testPositiveFloat(self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')])==False:
                 self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')]=self.poledb.loc[(self.conddb.index[polenum][0],self.conddb.index[polenum][1]),'Span'].iat[0]
+            else:
+                #Adjust Span from feet to miles
+                self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')]=self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')]/5280
         
         self.conddb=self.conddb.assign(Z0real=np.NaN,Z0imag=np.NaN,Z1real=np.NaN,Z1imag=np.NaN)
         
         for polein in self.conddb.index:
             if polein[2]==0:
                 pl1=self.conddb.loc[polein[0]]
+                pl1=pl1.loc[polein[1]]
                 linetype=pl1.iat[0,pl1.columns.get_loc('LineType')]
                 w = 2.0224e-3
                 resd = 1.588e-3*f
@@ -341,12 +346,12 @@ class faultCalculationClass():
                     fmat=np.mat([[f1,f2,f3],
                                  [f3,f1,f2],
                                  [f2,f3,f1]])
-                    zsa=pl1.loc[(polein[1],0),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],0),'GMRCalc'])
-                    zsb=pl1.loc[(polein[1],1),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],1),'GMRCalc'])
-                    zsc=pl1.loc[(polein[1],2),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],2),'GMRCalc'])
-                    zk=resd+1j*w*f*np.mat([np.log(De/pl1.loc[(polein[1],0),'AB']),np.log(De/pl1.loc[(polein[1],0),'BC']),np.log(De/pl1.loc[(polein[1],0),'CA'])])*fmat
+                    zsa=pl1.loc[0,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[0,'GMRCalc'])
+                    zsb=pl1.loc[1,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[1,'GMRCalc'])
+                    zsc=pl1.loc[2,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[2,'GMRCalc'])
+                    zk=resd+1j*w*f*np.mat([np.log(De/pl1.loc[0,'AB']),np.log(De/pl1.loc[0,'BC']),np.log(De/pl1.loc[0,'CA'])])*fmat
                     zabc=np.mat([[zsa, zk[0,0], zk[0,2]], [zk[0,0], zsb, zk[0,1]], [zk[0,2], zk[0,1], zsc]])
-                    print(np.log(De/pl1.loc[(polein[1],0),'CA']))
+                    #print(np.log(De/pl1.loc[(polein[1],0),'CA']))
     #                if neutral>1:
     #                    zsn=np.mat([[pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('GMRCalc')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')])],
     #                                [resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')]),pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('GMRCalc')])]])
@@ -355,24 +360,24 @@ class faultCalculationClass():
     #                    zabc=zabc-zkn.T*zsn.I*zkn
     #                    
     #                else:
-                    zsn=pl1.at[(polein[1],3),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],3),'GMRCalc'])
-                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'BN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'CN'])])
+                    zsn=pl1.at[3,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[3,'GMRCalc'])
+                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[0,'AN']),resd+1j*w*f*np.log(De/pl1.at[0,'BN']),resd+1j*w*f*np.log(De/pl1.at[0,'CN'])])
                     zabc=zabc-zkn.T*(1.0/zsn)*zkn
                     
                 elif linetype==2:
                     f1=.5
                     f2=.5
-                    fmat=sp.mat([[f1,f2,0],
+                    fmat=np.mat([[f1,f2,0],
                                   [f2,f1,0],
                                   [0,0,0]])
-                    zsa=pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('GMRCalc')])
-                    zsb=pl1.at[(polein[0],polein[1],1),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],1),pl1.columns.get_loc('GMRCalc')])
+                    zsa=pl1.loc[0,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[0,'GMRCalc'])
+                    zsb=pl1.loc[1,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[1,'GMRCalc'])
                     
-                    zk=resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('AB')])*fmat
-                    zabc=np.mat([[zsa,zk,0],[zk,zsb,0],[0,0,0]])
+                    zk=resd+1j*w*f*np.log(De/pl1.at[0,'AB'])*fmat
+                    zabc=np.mat([[zsa,zk[0,0],0],[zk[0,0],zsb,0],[0,0,0]])
     
-                    zsn=pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('GMRCalc')])
-                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('AN')]),resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('BN')]),0])
+                    zsn=pl1.at[2,'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[2,'GMRCalc'])
+                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[0,'AN']),resd+1j*w*f*np.log(De/pl1.at[0,'BN']),0])
                     zabc=zabc-zkn.T*(1.0/zsn)*zkn
                 else:
                     zsa=pl1.iat[0,pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.iat[0,pl1.columns.get_loc('GMRCalc')])
@@ -391,6 +396,7 @@ class faultCalculationClass():
                 z1=z012[1,0]+z012[1,1]+z012[1,2]
                 #zmatrix=np.array([[z1.real,z1.imag],
                 #                [z0.real,z0.imag]])
+                
                 self.conddb.at[polein,'Z1real']=z1.real
                 self.conddb.at[polein,'Z1imag']=z1.imag
                 self.conddb.at[polein,'Z0real']=z0.real
