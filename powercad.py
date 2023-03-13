@@ -2,12 +2,11 @@
 """
 Created on Tue Aug 13 07:07:34 2019
 
-(WinPython64-3740)
+Python 3.10.7
 
-Python Version 3.7.4
-Pandas Version 0.24.2
-Numpy Version 1.16.4+mkl
-Matplotlib Version 3.1.1
+Pandas Version 1.5.0
+Numpy Version 1.23.3
+Matplotlib Version 3.6.0
 
 @author: jcheers
 """
