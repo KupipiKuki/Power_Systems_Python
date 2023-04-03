@@ -1,0 +1,5 @@
+Name,Phase1Radius,Phase1X,Phase1Hin,Phase1Hout,Phase2Radius,Phase2X,Phase2Hin,Phase2Hout,Phase3Radius,Phase3X,Phase3Hin,Phase3Hout,Phase4Radius,Phase4X,Phase4Hin,Phase4Hout,Phase5Radius,Phase5X,Phase5Hin,Phase5Hout,Phase6Radius,Phase6X,Phase6Hin,Phase6Hout,NeutralRadius,NeutralX,NeutralHin,NeutralHout,GuyRadius,GuyX,GuyH1,GuyH2,GuyH3,GuyH4,GuyH5,GuyH6
+VD1.81,0,-56,0,0,0,-19,0,0,0,-44,-48,-48,0,56,0,0,0,19,0,0,0,44,-48,-48,1,2,-84,-84,1,0,-21,,,,,
+VD1.82,0,-56,0,0,0,-19,0,0,0,-44,-48,-48,0,56,0,0,0,19,0,0,0,44,-48,-48,1,15,-84,-84,1,0,-21,,,,,
+VD1.81P,0,-56,4,4,0,-19,4,4,0,-44,-44,-44,0,56,4,4,0,19,4,4,0,44,-44,-44,1,2,-84,-84,1,0,-21,,,,,
+VD1.82P,0,-56,4,4,0,-19,4,4,0,-44,-44,-44,0,56,4,4,0,19,4,4,0,44,-44,-44,1,15,-84,-84,1,0,-21,,,,,
