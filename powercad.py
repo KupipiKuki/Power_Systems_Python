@@ -44,9 +44,10 @@ class faultCalculationClass():
         aac=pd.read_csv('./Conductors/AAC.csv')
         copper=pd.read_csv('./Conductors/COPPER.csv')
         copperweld=pd.read_csv('./Conductors/COPPERWELD40.csv')
+        copperweldcopper=pd.read_csv('./Conductors/COPPERWELDCOPPER.csv')
         triplex=pd.read_csv('./Conductors/TRIPLEX.csv')
-        self.conductordb=pd.concat([acsr,aaac,aac,copper,copperweld,triplex],keys=['ACSR','AAAC','AAC','Copper','Copperweld','Triplex'])
-        
+        self.conductordb=pd.concat([acsr,aaac,aac,copper,copperweld,copperweldcopper,triplex],keys=['ACSR','AAAC','AAC','Copper','Copperweld','CopperweldCopper','Triplex'])
+    
         self.curvedb = pd.read_csv('./curves/curvedb.csv',dtype={'CurveRef' : str, 'CurveRefAlt1' : str, 'CurveRefAlt2' : str, 'CurveFile' : str})
         
         a = rect(1,(2*np.pi)/3)
@@ -321,7 +322,7 @@ class faultCalculationClass():
         for polein in self.conddb.index:
             if polein[2]==0:
                 pl1=self.conddb.loc[polein[0]]
-                linetype=pl1.iat[0,pl1.columns.get_loc('LineType')]
+                linetype=pl1.at[(polein[1],0),'LineType']
                 w = 2.0224e-3
                 resd = 1.588e-3*f
                 #Soil Type (wet-1,swampy-2,average-3,dry-4)
@@ -346,7 +347,7 @@ class faultCalculationClass():
                     zsc=pl1.loc[(polein[1],2),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],2),'GMRCalc'])
                     zk=resd+1j*w*f*np.mat([np.log(De/pl1.loc[(polein[1],0),'AB']),np.log(De/pl1.loc[(polein[1],0),'BC']),np.log(De/pl1.loc[(polein[1],0),'CA'])])*fmat
                     zabc=np.mat([[zsa, zk[0,0], zk[0,2]], [zk[0,0], zsb, zk[0,1]], [zk[0,2], zk[0,1], zsc]])
-                    print(np.log(De/pl1.loc[(polein[1],0),'CA']))
+                    
     #                if neutral>1:
     #                    zsn=np.mat([[pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('GMRCalc')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')])],
     #                                [resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')]),pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('GMRCalc')])]])
@@ -358,21 +359,22 @@ class faultCalculationClass():
                     zsn=pl1.at[(polein[1],3),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],3),'GMRCalc'])
                     zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'BN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'CN'])])
                     zabc=zabc-zkn.T*(1.0/zsn)*zkn
-                    
+                    #print(zabc)
                 elif linetype==2:
                     f1=.5
                     f2=.5
                     fmat=np.mat([[f1,f2,0],
                                   [f2,f1,0],
                                   [0,0,0]])
-                    zsa=pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('GMRCalc')])
-                    zsb=pl1.at[(polein[0],polein[1],1),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],1),pl1.columns.get_loc('GMRCalc')])
+                    zsa=pl1.at[(polein[1],0),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'GMRCalc'])
+                    zsb=pl1.at[(polein[1],1),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],1),'GMRCalc'])
                     
-                    zk=resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('AB')])*fmat
-                    zabc=np.mat([[zsa,zk,0],[zk,zsb,0],[0,0,0]])
+                    zk=resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AB'])*fmat
+                    
+                    zabc=np.mat([[zsa,zk[0,0],0],[zk[0,0],zsb,0],[0,0,0]])
     
-                    zsn=pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('GMRCalc')])
-                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('AN')]),resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],0),pl1.columns.get_loc('BN')]),0])
+                    zsn=pl1.at[(polein[1],2),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],2),'GMRCalc'])
+                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'BN']),0])
                     zabc=zabc-zkn.T*(1.0/zsn)*zkn
                 else:
                     zsa=pl1.iat[0,pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.iat[0,pl1.columns.get_loc('GMRCalc')])
@@ -385,6 +387,7 @@ class faultCalculationClass():
                 zabc = zabc*pl1.iat[0,pl1.columns.get_loc('Span')]
                 #Perform the transformation on Zabc to obtain the sequence impedance matrix Z012
                 z012 = self.Ainv*zabc*self.Amat
+                #print(z012)
                 #Compute the zero sequence impedance
                 z0=z012[0,0]+z012[0,1]+z012[0,2]
                 #Compute the positive sequence impedance
@@ -427,70 +430,71 @@ class faultCalculationClass():
         except KeyError:
             self.conddb=self.conddb.assign(CN=np.NaN)
             
-        for polenum in range(0, len(self.conddb.index)):
-            test=self.conddb.iat[polenum,self.conddb.columns.get_loc('Assembly')]
-            if pd.isna(test)==False:
-                if re.findall(r"(^A)",test):
-                    asm=self.Acon.loc[self.Acon.Name == test]
-                    if asm.empty==True:
-                        asm=self.Acon[self.Acon.Name.str.contains(test, na=False)]
+        for polenum in self.conddb.index:
+            if polenum[2]==0:
+                test=self.conddb.at[polenum,'Assembly']
+                if pd.isna(test)==False:
+                    if re.findall(r"(^A)",test):
+                        asm=self.Acon.loc[self.Acon.Name == test]
                         if asm.empty==True:
-                            asm=self.Acon.loc[self.Acon.AltName == test]
+                            asm=self.Acon[self.Acon.Name.str.contains(test, na=False)]
                             if asm.empty==True:
-                                asm=self.Acon[self.Acon.AltName.str.contains(test, na=False)]
-                    if asm.empty==False:
-                        sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('AN')]=np.sqrt(sqrtx+sqrty)/12
-                    self.conddb.iat[polenum,self.conddb.columns.get_loc('LineType')]=1
-                            
-                elif re.findall(r"(^B)",test):
-                    asm=self.Bcon.loc[self.Bcon.Name == test]
-                    if asm.empty==True:
-                        asm=self.Bcon[self.Bcon.Name.str.contains(test, na=False)]
+                                asm=self.Acon.loc[self.Acon.AltName == test]
+                                if asm.empty==True:
+                                    asm=self.Acon[self.Acon.AltName.str.contains(test, na=False)]
+                        if asm.empty==False:
+                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
+                        self.conddb.at[polenum,'LineType']=1
+                                
+                    elif re.findall(r"(^B)",test):
+                        asm=self.Bcon.loc[self.Bcon.Name == test]
                         if asm.empty==True:
-                            asm=self.Bcon.loc[self.Bcon.Name == test]
+                            asm=self.Bcon[self.Bcon.Name.str.contains(test, na=False)]
                             if asm.empty==True:
-                                asm=self.Bcon[self.Bcon.AltName.str.contains(test, na=False)]
-                    if asm.empty==False:
-                        sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
-                        sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('AB')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('AN')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('BN')]=np.sqrt(sqrtx+sqrty)/12
-                    self.conddb.iat[polenum,self.conddb.columns.get_loc('LineType')]=2
-                elif re.findall(r"(^C)",test):
-                    asm=self.Ccon.loc[self.Ccon.Name == test]
-                    if asm.empty==True:
-                        asm=self.Ccon[self.Ccon.Name.str.contains(test, na=False)]
+                                asm=self.Bcon.loc[self.Bcon.Name == test]
+                                if asm.empty==True:
+                                    asm=self.Bcon[self.Bcon.AltName.str.contains(test, na=False)]
+                        if asm.empty==False:
+                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
+                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
+                            self.conddb.at[polenum,'AB']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'BN']=np.sqrt(sqrtx+sqrty)/12
+                        self.conddb.at[polenum,'LineType']=2
+                    elif re.findall(r"(^C)",test):
+                        asm=self.Ccon.loc[self.Ccon.Name == test]
                         if asm.empty==True:
-                            asm=self.Ccon.loc[self.Ccon.AltName == test]
+                            asm=self.Ccon[self.Ccon.Name.str.contains(test, na=False)]
                             if asm.empty==True:
-                                asm=self.Ccon[self.Ccon.AltName.str.contains(test, na=False)]
-                    if asm.empty==False:
-                        sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
-                        sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('AB')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])
-                        sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('BC')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])
-                        sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('CA')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('AN')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('BN')]=np.sqrt(sqrtx+sqrty)/12
-                        sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])
-                        sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])
-                        self.conddb.iat[polenum,self.conddb.columns.get_loc('CN')]=np.sqrt(sqrtx+sqrty)/12
-                    self.conddb.iat[polenum,self.conddb.columns.get_loc('LineType')]=3
+                                asm=self.Ccon.loc[self.Ccon.AltName == test]
+                                if asm.empty==True:
+                                    asm=self.Ccon[self.Ccon.AltName.str.contains(test, na=False)]
+                        if asm.empty==False:
+                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
+                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
+                            self.conddb.at[polenum,'AB']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])
+                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])
+                            self.conddb.at[polenum,'BC']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])
+                            sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])
+                            self.conddb.at[polenum,'CA']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'BN']=np.sqrt(sqrtx+sqrty)/12
+                            sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])
+                            sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])
+                            self.conddb.at[polenum,'CN']=np.sqrt(sqrtx+sqrty)/12
+                        self.conddb.at[polenum,'LineType']=3
     
     def ifault(self,zlt,vf,zgnd,zfault,matreturn):
         zt=zlt[0,0]

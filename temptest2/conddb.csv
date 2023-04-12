@@ -1,0 +1,5 @@
+StudyPoleTag,PoleTag,PoleNumber,Assembly,AssemblyHeight,ConductorType,ConductorName,NormAngle,Span,Tension
+1,2,0,C1.11,0,AAAC,Canton,0,1,2800
+1,2,1,C1.11,0,AAAC,Canton,0,1,2800
+1,2,2,C1.11,0,AAAC,Canton,0,1,2800
+1,2,3,C1.11,0,AAAC,Anaheim,0,1,2800
