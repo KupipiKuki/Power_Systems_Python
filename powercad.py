@@ -687,7 +687,7 @@ class faultCalculationClass():
         ID=np.dot(self.Amat,I012D)
         return ID
     
-    def curveload(self,curveref,Ip,CT,TD,inst,delay,shift):
+    def curveload(self,curveref,Ip,CT,TD,inst,delay,shift,adder=0):
         if tfn.testIsString(curveref)==False:
             print('Convereting curve number to string\r\n')
             curveref=str(curveref)
@@ -719,27 +719,26 @@ class faultCalculationClass():
                 C0=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveModifier')]
                 C1=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveAdjust')]
                 #print('Curve File: '+self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveFile')])
-            
             #Curve U1-5/C1-5
             if Ceq==0:
                 x=1.5
                 if inst>0:
                     while x <= 100:
                         if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))])
+                            relaycurve = np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])
                         else:
                             if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))])))
+                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])))
                             else:
                                 relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
                         x+=0.1
                 else:
                     while x <= 100:
                         if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))])
-                            print(np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))]))
+                            relaycurve = np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])
+                            #print(np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))]))
                         else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))])))
+                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])))
                         x+=0.1
             #Curve ITE
             elif Ceq==1:
@@ -857,7 +856,7 @@ class faultCalculationClass():
                         print(relaycurve)
                 else:
                     relaycurve[:,0]=relaycurve[:,0]*C0*Ip*CT
-            if not np.isnan(shift):
+            if shift>0:
                 relaycurve[:,0]=relaycurve[:,0]*shift
         else:
             print('Curve Not Found')
@@ -934,32 +933,37 @@ class faultCalculationClass():
         try:
             self.ocdevdb.columns.get_loc('iPickup')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickup=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(iPickup=0)
             
         try:
             self.ocdevdb.columns.get_loc('ctRatio')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(ctRatio=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(ctRatio=0)
             
         try:
             self.ocdevdb.columns.get_loc('TimeDial')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(TimeDial=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(TimeDial=0)
             
         try:
             self.ocdevdb.columns.get_loc('iPickupInst')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickupInst=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(iPickupInst=0)
             
         try:
             self.ocdevdb.columns.get_loc('Delay')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Delay=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(Delay=0)
         
         try:
             self.ocdevdb.columns.get_loc('Shift')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Shift=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(Shift=0)
+        
+        try:
+            self.ocdevdb.columns.get_loc('Adder')
+        except KeyError:
+            self.ocdevdb=self.ocdevdb.assign(Adder=0)
         
         print(self.ocdevdb)
         
@@ -981,20 +985,21 @@ class faultCalculationClass():
         
         
         for ocdev in range(0,len(pl1.index)):
-            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')]),columns=['Current','Time'])
+            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')],pl1.iat[ocdev,pl1.columns.get_loc('Adder')]),columns=['Current','Time'])
             devCurve=devCurve.assign(CurveNum=ocdev)
             devCurve.set_index('CurveNum',inplace=True)
-            devCurve.sort_values(by=['Time'],inplace=True)
             #time=np.interp(ifault,devCurve['Time'],devCurve['Current'])
             #print(np.round(np.interp(ifault,devCurve['Time'],devCurve['Current']),2))
             if showifault:
-                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' '+str(np.round(np.interp(ifault,devCurve['Time'],devCurve['Current']),2))+ ' Seconds'
+                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' '+str(np.round(np.interp(ifault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
+                print(np.interp(ifault,devCurve['Current'],devCurve['Time']))
+            devCurve.sort_values(by=['Time'],inplace=True)
             if ocdev==0:
                 devCurves=devCurve
             else:
                 devCurves=pd.concat([devCurves,devCurve])
             print(devCurve)
-        fig = plt.figure(figsize=(8, 10), dpi=80, facecolor='w', edgecolor='k')
+        fig = plt.figure(figsize=(8.5, 11), dpi=80, facecolor='w', edgecolor='k')
         ax=fig.add_subplot(111, aspect='equal')
         for ocdev in range(0,len(pl1.index)):
             #ax.loglog(devCurves[ocdev,0], devCurves[ocdev,1],label=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')])
@@ -1011,8 +1016,8 @@ class faultCalculationClass():
         ax.set_xlabel('Current (A)')
         ax.set_ylabel('Time (s)')
         plt.savefig(projectdir+projectname+'-TCC.pdf', dpi=None, facecolor='w', edgecolor='w',
-                orientation='portrait', papertype='letter', format='pdf',
-                transparent=False, bbox_inches=None, pad_inches=0.1)
+                orientation='portrait', format='pdf',
+                transparent=False, bbox_inches=None, pad_inches=0.25)
         plt.close()
         
     def tccGenerator(self,projectdir,projectname,showmaxfault,maxfault,maxfaultname,showminfault,minfault,minfaultname,showldfault,ldfault,ldfaultname):
@@ -1056,32 +1061,37 @@ class faultCalculationClass():
         try:
             self.ocdevdb.columns.get_loc('iPickup')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickup=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(iPickup=0)
             
         try:
             self.ocdevdb.columns.get_loc('ctRatio')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(ctRatio=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(ctRatio=0)
             
         try:
             self.ocdevdb.columns.get_loc('TimeDial')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(TimeDial=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(TimeDial=0)
             
         try:
             self.ocdevdb.columns.get_loc('iPickupInst')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickupInst=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(iPickupInst=0)
             
         try:
             self.ocdevdb.columns.get_loc('Delay')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Delay=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(Delay=0)
         
         try:
             self.ocdevdb.columns.get_loc('Shift')
         except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Shift=np.NaN)
+            self.ocdevdb=self.ocdevdb.assign(Shift=0)
+        
+        try:
+            self.ocdevdb.columns.get_loc('Adder')
+        except KeyError:
+            self.ocdevdb=self.ocdevdb.assign(Adder=0)
         
         for devnum in range(0,len(self.ocdevdb.index)):
             if tfn.testPositiveFloat(self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]):
@@ -1101,22 +1111,22 @@ class faultCalculationClass():
         
         
         for ocdev in range(0,len(pl1.index)):
-            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')]),columns=['Current','Time'])
+            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')],pl1.iat[ocdev,pl1.columns.get_loc('Adder')]),columns=['Current','Time'])
             devCurve=devCurve.assign(CurveNum=ocdev)
             devCurve.set_index('CurveNum',inplace=True)
-            devCurve.sort_values(by=['Time'],inplace=True)
             #time=np.interp(ifault,devCurve['Time'],devCurve['Current'])
             #print(np.round(np.interp(ifault,devCurve['Time'],devCurve['Current']),2))
             if showmaxfault:
-                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Max: '+str(np.round(np.interp(maxfault,devCurve['Time'],devCurve['Current']),2))+ ' Seconds'
+                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Max: '+str(np.round(np.interp(maxfault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
             if showminfault:
-                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Min: '+str(np.round(np.interp(minfault,devCurve['Time'],devCurve['Current']),2))+ ' Seconds'
+                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Min: '+str(np.round(np.interp(minfault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
+            devCurve.sort_values(by=['Time'],inplace=True)
             if ocdev==0:
                 devCurves=devCurve
             else:
                 devCurves=pd.concat([devCurves,devCurve])
 
-        fig = plt.figure(figsize=(8, 10), dpi=80, facecolor='w', edgecolor='k')
+        fig = plt.figure(figsize=(8.5, 11), dpi=80, facecolor='w', edgecolor='k')
         ax=fig.add_subplot(111, aspect='equal')
         for ocdev in range(0,len(pl1.index)):
             #ax.loglog(devCurves[ocdev,0], devCurves[ocdev,1],label=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')])
@@ -1137,6 +1147,6 @@ class faultCalculationClass():
         ax.set_xlabel('Current (A)')
         ax.set_ylabel('Time (s)')
         plt.savefig(projectdir+projectname+'-TCC.pdf', dpi=None, facecolor='w', edgecolor='w',
-                orientation='portrait', papertype='letter', format='pdf',
-                transparent=False, bbox_inches=None, pad_inches=0.1)
+                orientation='portrait', format='pdf',
+                transparent=False, bbox_inches=None, pad_inches=0.25)
         plt.close()
