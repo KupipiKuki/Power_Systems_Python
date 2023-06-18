@@ -19,6 +19,7 @@ from cmath import polar
 import re
 import matplotlib.pyplot as plt
 import testfunctions as tfn
+import powercadfunctions as pcf
 import scipy.stats as ssp
 import os
 import warnings
@@ -26,7 +27,7 @@ import sys
 
 class faultCalculationClass():
     
-    def prepData(self):
+    def __init__(self):
         wd=pd.ExcelFile('./PoleData/WoodPoles.xlsx')
         
         for sh in range(0, len(wd.sheet_names)):
@@ -497,6 +498,21 @@ class faultCalculationClass():
                         self.conddb.at[polenum,'LineType']=3
     
     def ifault(self,zlt,vf,zgnd,zfault,matreturn):
+        """
+        ifault\n
+        \n
+        zlt - impedance in pu, np.array complex format [[r1+x1j],[r0+x0j]]
+        vf - voltage in pu, float
+        zgnd - ground impedance in pu, float
+        zfault - fault impedance in pu, float
+        matreturn:
+            0 Iabc matrix
+            1 Iabc matrix dy viewed from D
+            2 Iabc matrix yd viewed from Y
+            3 I012 matrix dy viewed from D
+            4 I012 matrix yd viewed from Y
+            5 I012 matrix
+        """
         zt=zlt[0,0]
         z0t=zlt[1,0]
         #*********************************************************************#
@@ -591,7 +607,16 @@ class faultCalculationClass():
     #     Nameplate Percent Impedance,
     #     X/R ratio,
     #     Z1/Z0 ratio)
-    def xfmr(self,MVAbase, Zpercent, XRratio, results, zeromult):
+    def xfmr(self,MVAbase, Zpercent, XRratio=False, results=False, zeromult=1):
+        """
+        xfmr\n
+        \n
+        MVAbase - Transformer Base MVA, float
+        Zpercent - Percent Impedance, float
+        XRratio - Default False (random) or float
+        results - 'rand' or False for random, 'rlow' random low range, 'rhigh' random high range
+        zeromult - multiplier for zero sequence, float
+        """
         #test to see if XRratio is a positive value
         if tfn.testPositiveFloat(XRratio)==False:
             XRratio=self.xrcalc(MVAbase,results)
@@ -687,7 +712,7 @@ class faultCalculationClass():
         ID=np.dot(self.Amat,I012D)
         return ID
     
-    def curveload(self,curveref,Ip,CT,TD,inst,delay,shift,adder=0):
+    def curveload(self,curveref,Ip,CT,TD,inst,delay,shift,adder=0,lcf=0,hcf=0):
         if tfn.testIsString(curveref)==False:
             print('Convereting curve number to string\r\n')
             curveref=str(curveref)
@@ -707,143 +732,45 @@ class faultCalculationClass():
             if pd.isna(self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveFile')]):
                 print('Curve Equation '+str(self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveEquation')]))
                 Ceq=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveEquation')]
-                C0=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff0')]
-                C1=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff1')]
-                C2=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff2')]
-                C3=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff3')]
-                C4=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff4')]
-                C5=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff5')]
-                C6=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff6')]
+                coeff=[self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff0')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff1')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff2')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff3')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff4')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff5')],
+                       self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveCoeff6')]]
             else:
                 Ceq=99
                 C0=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveModifier')]
                 C1=self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveAdjust')]
-                #print('Curve File: '+self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveFile')])
-            #Curve U1-5/C1-5
-            if Ceq==0:
-                x=1.5
-                if inst>0:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
-                        x+=0.1
+            if Ceq<99:
+                if hcf==0:
+                    hcf=100000
+                if Ceq==5:
+                    x=1.1
                 else:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])
-                            #print(np.array([x*Ip*CT,TD*(C0+(C1/(x**C2-C3)))]))
-                        else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(TD*(C0+(C1/(x**C2-C3))))+adder])))
-                        x+=0.1
-            #Curve ITE
-            elif Ceq==1:
-                x=1.5
-                if inst>0:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
-                        x+=0.1
+                    x=1.5
+                if lcf>x:
+                    if lcf<100 and lcf < hcf:
+                        x=lcf
+                curve_data=pcf.curve_calc(x, Ip, CT, TD, adder, lcf, hcf, Ceq, coeff)
+                
+                max_x=int(100000/CT)
+                if max_x<500:
+                    x_inc=0.01
                 else:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])
-                        else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])))
-                        x+=0.1
-            #Curve MICRO51
-            elif Ceq==2:
-                x=1.5
-                if inst>0:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
-                        x+=0.1
-                else:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])
-                        else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(((C4*TD)-C5)/C6))])))
-                        x+=0.1
-            #Curve MCO
-            elif Ceq==3:
-                x=1.5
-                if inst>0:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(TD/C6))])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(TD/C6))])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
-                        x+=0.1
-                else:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(TD/C6))])
-                        else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,((C0+(C1/(x-C2)**C3))*(TD/C6))])))
-                        x+=0.1
-            #Curve DPU
-            elif Ceq==4:
-                x=1.5
-                if inst>0:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,(((C1/(x**C2-C3))+C0)*(((C4*TD)-C5)/C6))])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(((C1/(x**C2-C3))+C0)*(((C4*TD)-C5)/C6))])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,delay])))
-                        x+=0.1
-                else:
-                    while x <= 100:
-                        if x==1.5:
-                            relaycurve = np.array([x*Ip*CT,(((C1/(x**C2-C3))+C0)*(((C4*TD)-C5)/C6))])
-                        else:
-                            relaycurve = np.vstack((relaycurve,np.array([x*Ip*CT,(((C1/(x**C2-C3))+C0)*(((C4*TD)-C5)/C6))])))
-                        x+=0.1
-            #Curve VacuFuse
-            elif Ceq==5:
-                x=1.1
-                if inst>0:
-                    while x <= 100:
-                        if x==1.1:
-                            relaycurve = np.array([x*C0,((C1/(((x**C4)-C3))+C2)*TD)])
-                        else:
-                            if x<=(inst/Ip):
-                                relaycurve = np.vstack((relaycurve,np.array([x*C0,((C1/(((x**C4)-C3))+C2)*TD)])))
-                            else:
-                                relaycurve = np.vstack((relaycurve,np.array([x*C0,delay])))
-                        x+=0.1
-                else:
-                    while x <= 100:
-                        if x==1.1:
-                            relaycurve = np.array([x*C0,((C1/(((x**C4)-C3))+C2)*TD)])
-                        else:
-                            tvalue=((C1/(((x**C4)-C3))+C2)*TD)
-                            if tvalue<=0.0167:
-                                tvalue=0.0167
-                            relaycurve = np.vstack((relaycurve,np.array([x*C0,tvalue])))
-                        x+=0.1
-            elif Ceq==99:
+                    x_inc=0.1
+                
+                while x <= max_x:
+                    if x>hcf:
+                        break
+                    if inst>0 and x>=inst:
+                        curve_data.get_step(x,delay)
+                    else:
+                        curve_data.get_step(x)
+                    x+=x_inc
+                relaycurve=curve_data.curve
+            else:
                 relaycurve=np.loadtxt(self.curvedb.iat[curvenum,self.curvedb.columns.get_loc('CurveFile')])
                 print(inst)
                 if C1>0:
@@ -874,7 +801,7 @@ class faultCalculationClass():
             return vdrop
 
     def calcImpedanceLaunch(self,projectdir,projectname,frequency,environmenttype):
-        self.prepData()
+        #self.prepData()
         self.poledb = pd.read_csv(projectdir+'poledb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
         self.poledb = self.poledb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
         self.conddb = pd.read_csv(projectdir+'conddb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
@@ -884,7 +811,7 @@ class faultCalculationClass():
         self.conddb.to_csv(projectdir+'condfcc.csv')
         
     def calcVoltDropLaunch(self,projectdir,projectname,frequency,environmenttype):
-        self.prepData()
+        #self.prepData()
         self.poledb = pd.read_csv(projectdir+'poledb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
         self.poledb = self.poledb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
         self.conddb = pd.read_csv(projectdir+'conddb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
@@ -892,139 +819,11 @@ class faultCalculationClass():
         self.calcCurrent()
         self.calcImpedance(environmenttype,frequency)
         
-    def tccLaunch(self,projectdir,projectname,showifault,ifault,ifaultname):
-        #csv column labels for overcurrent devices: StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,ShowPlot,PlotLabel
-        #
-        #Hydraulic Recloser Note: only the base curve is included, so an iPickup of 1 and a ctRatio of 1 would refer to a 5A, a ctRatio of 3 would refer to a 15A... 
-        self.prepData()
-        try:
-            self.ocdevdb = pd.read_csv(projectdir+'ocdevdb.csv',dtype={'StudyPoleTag' : str, 'DevTag' : str})
-        except FileNotFoundError:
-            print('File not found: '+projectdir+'ocdevdb.csv' )
-            sys.exit(1)
-        except pd.io.common.EmptyDataError:
-            print('File Empty')
-            sys.exit(1)
-        
-        try:
-            self.ocdevdb.columns.get_loc('StudyPoleTag')
-        except KeyError:
-            print('Study Pole Tag Missing')
-            sys.exit(1)
-            
-        try:
-            self.ocdevdb.columns.get_loc('DevTag')
-        except KeyError:
-            print('Overcurrent Device Tag Missing')
-            sys.exit(1)
-        
-        try:
-            self.ocdevdb.columns.get_loc('CurveRef')
-        except KeyError:
-            print('Curve Designation Missing')
-            sys.exit(1)
-
-        try:
-            self.ocdevdb.columns.get_loc('ShowPlot')
-        except KeyError:
-            print('No plots to be printed, exiting...')
-            sys.exit(1)
-        
-        try:
-            self.ocdevdb.columns.get_loc('iPickup')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickup=0)
-            
-        try:
-            self.ocdevdb.columns.get_loc('ctRatio')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(ctRatio=0)
-            
-        try:
-            self.ocdevdb.columns.get_loc('TimeDial')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(TimeDial=0)
-            
-        try:
-            self.ocdevdb.columns.get_loc('iPickupInst')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(iPickupInst=0)
-            
-        try:
-            self.ocdevdb.columns.get_loc('Delay')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Delay=0)
-        
-        try:
-            self.ocdevdb.columns.get_loc('Shift')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Shift=0)
-        
-        try:
-            self.ocdevdb.columns.get_loc('Adder')
-        except KeyError:
-            self.ocdevdb=self.ocdevdb.assign(Adder=0)
-        
-        print(self.ocdevdb)
-        
-        for devnum in range(0,len(self.ocdevdb.index)):
-            if tfn.testPositiveFloat(self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]):
-                self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]=True
-            else:
-                self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]=False
-                
-        pl1 = self.ocdevdb.loc[(self.ocdevdb.ShowPlot==True)]
-        plottotal=len(pl1.index)
-        if (tfn.testPositiveFloat(plottotal)):
-            if plottotal>10:
-                print('Plots selected: '+plottotal+' exceeds maximum, defaulting to 6')
-                plottotal=10
-        else:
-            print('No plots to be printed, exiting...')
-            sys.exit(1)
-        
-        
-        for ocdev in range(0,len(pl1.index)):
-            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')],pl1.iat[ocdev,pl1.columns.get_loc('Adder')]),columns=['Current','Time'])
-            devCurve=devCurve.assign(CurveNum=ocdev)
-            devCurve.set_index('CurveNum',inplace=True)
-            #time=np.interp(ifault,devCurve['Time'],devCurve['Current'])
-            #print(np.round(np.interp(ifault,devCurve['Time'],devCurve['Current']),2))
-            if showifault:
-                pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' '+str(np.round(np.interp(ifault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
-                print(np.interp(ifault,devCurve['Current'],devCurve['Time']))
-            devCurve.sort_values(by=['Time'],inplace=True)
-            if ocdev==0:
-                devCurves=devCurve
-            else:
-                devCurves=pd.concat([devCurves,devCurve])
-            print(devCurve)
-        fig = plt.figure(figsize=(8.5, 11), dpi=80, facecolor='w', edgecolor='k')
-        ax=fig.add_subplot(111, aspect='equal')
-        for ocdev in range(0,len(pl1.index)):
-            #ax.loglog(devCurves[ocdev,0], devCurves[ocdev,1],label=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')])
-            devCurves.loc[ocdev].plot(ax=ax,x='Current',y='Time',loglog=True, label=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')])
-        if showifault:
-            ax.loglog([ifault,ifault], [0.01,100],label=ifaultname)
-        plt.xlim(10,100000)
-        plt.ylim(0.01,1000)
-        plt.grid
-        plt.grid(b=True, which='both', color='0.65',linestyle='-')
-        handles, labels = ax.get_legend_handles_labels()
-        ax.legend(handles, labels, loc=1)
-        ax.set_title(projectname+' Time Coordination Chart')
-        ax.set_xlabel('Current (A)')
-        ax.set_ylabel('Time (s)')
-        plt.savefig(projectdir+projectname+'-TCC.pdf', dpi=None, facecolor='w', edgecolor='w',
-                orientation='portrait', format='pdf',
-                transparent=False, bbox_inches=None, pad_inches=0.25)
-        plt.close()
-        
     def tccGenerator(self,projectdir,projectname,showmaxfault,maxfault,maxfaultname,showminfault,minfault,minfaultname,showldfault,ldfault,ldfaultname):
         #csv column labels for overcurrent devices: StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,ShowPlot,PlotLabel
         #
         #Hydraulic Recloser Note: only the base curve is included, so an iPickup of 1 and a ctRatio of 1 would refer to a 5A, a ctRatio of 3 would refer to a 15A... 
-        self.prepData()
+        #self.prepData()
         try:
             self.ocdevdb = pd.read_csv(projectdir+'ocdevdb.csv',dtype={'StudyPoleTag' : str, 'DevTag' : str})
         except FileNotFoundError:
@@ -1093,6 +892,16 @@ class faultCalculationClass():
         except KeyError:
             self.ocdevdb=self.ocdevdb.assign(Adder=0)
         
+        try:
+            self.ocdevdb.columns.get_loc('LowCurrentCutoff')
+        except KeyError:
+            self.ocdevdb=self.ocdevdb.assign(LowCurrentCutoff=0)
+        
+        try:
+            self.ocdevdb.columns.get_loc('HighCurrentCutoff')
+        except KeyError:
+            self.ocdevdb=self.ocdevdb.assign(HighCurrentCutoff=100)
+        
         for devnum in range(0,len(self.ocdevdb.index)):
             if tfn.testPositiveFloat(self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]):
                 self.ocdevdb.iat[devnum,self.ocdevdb.columns.get_loc('ShowPlot')]=True
@@ -1111,7 +920,20 @@ class faultCalculationClass():
         
         
         for ocdev in range(0,len(pl1.index)):
-            devCurve=pd.DataFrame(self.curveload(pl1.iat[ocdev,pl1.columns.get_loc('CurveRef')],pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],pl1.iat[ocdev,pl1.columns.get_loc('Delay')],pl1.iat[ocdev,pl1.columns.get_loc('Shift')],pl1.iat[ocdev,pl1.columns.get_loc('Adder')]),columns=['Current','Time'])
+            devCurve=pd.DataFrame(
+                self.curveload(pl1.iat[
+                    ocdev,pl1.columns.get_loc('CurveRef')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('iPickup')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('ctRatio')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('TimeDial')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('iPickupInst')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('Delay')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('Shift')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('Adder')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('LowCurrentCutoff')],
+                    pl1.iat[ocdev,pl1.columns.get_loc('HighCurrentCutoff')]),
+                columns=['Current','Time'])
+            
             devCurve=devCurve.assign(CurveNum=ocdev)
             devCurve.set_index('CurveNum',inplace=True)
             #time=np.interp(ifault,devCurve['Time'],devCurve['Current'])
@@ -1120,7 +942,7 @@ class faultCalculationClass():
                 pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Max: '+str(np.round(np.interp(maxfault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
             if showminfault:
                 pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]=pl1.iat[ocdev,pl1.columns.get_loc('PlotLabel')]+' Min: '+str(np.round(np.interp(minfault,devCurve['Current'],devCurve['Time']),2))+ ' Seconds'
-            devCurve.sort_values(by=['Time'],inplace=True)
+            #devCurve.sort_values(by=['Time'],inplace=True)
             if ocdev==0:
                 devCurves=devCurve
             else:
