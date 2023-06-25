@@ -5,7 +5,7 @@ Created on Tue Apr 25 14:44:11 2023
 @author: jmc53
 """
 
-import powercad as pc
+from pc_classes import powercad as pc
 import numpy as np
 
 sb=100.0e6

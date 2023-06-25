@@ -4,22 +4,12 @@ Created on Tue Sep 10 09:46:06 2019
 
 @author: user
 """
-import numpy as np
-import polecad as pc
+from pc_classes import polecad as pc
+from pc_classes.pc_functions import dataconstants as dct
 
-
-#direction wind is blowing
-northwind=(3*np.pi)/2
-northwestwind=(7*np.pi)/4
-westwind=0
-southwestwind=(1*np.pi)/4
-southwind=np.pi/2
-southeastwind=(7*np.pi)/4
-eastwind=np.pi
-northeastwind=(5*np.pi)/4
 
 projectname='Spans'
-projectdir='./'+projectname+'/'
+projectdir='./PoleCadTests/'+projectname+'/'
 
 designTension=0.5
 strengthFactor=0.65
@@ -27,7 +17,7 @@ windLoad=4
 windOverload=2.5
 tensionOverload=1.65
 iceThickness=0.5
-windAngle=eastwind
+windAngle=dct.eastwind
 deflectionFactor=1
 
 pcc=pc.poleCalculationClass()

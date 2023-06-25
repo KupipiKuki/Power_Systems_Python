@@ -1,0 +1,3 @@
+StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,ShowPlot,PlotLabel,Adder,Shift,LowCurrentCutoff
+1001,dev1,U3,6,300,1,0,0,1,normal,0,0,0
+1002,dev2,U3,6,300,1,0,0,1,lowcutoff,0,0,2

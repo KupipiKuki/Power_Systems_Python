@@ -1,4 +1,0 @@
-StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,ShowPlot,PlotLabel,Adder,Shift,LowCurrentCutoff
-1000,751A,U4,8.7,80,1.2,0,0,0,751A_XFMR,0.5,2.77,0
-1001,787,U4,6.4,300,1.2,0,0,1,787_XFMR,0.5,0,2
-1002,651R,U4,0.56,1000,4,5,0.17,1,651RA_C1,0.25,0,0

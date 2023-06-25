@@ -1,0 +1,3 @@
+StudyPoleTag,PoleTag,PoleNumber,PoleHeight,PoleClass,MapX,MapY,PoleSpecies,GradeHeight,NeutralHeight,NormX,NormY,Span,NormAngle,PoleCt,PoleCb,PoleCg,Mrn,Mbn,Mr,Mb,Mbx,Mby,Mtx,Mty,Mgx,Mgy,Mtcx,Mtcy,Mcgx,Mcgy,Mcmax,Mcwsx,Mcwsy,Mccwsx,Mccwsy,Mex,Mey,Mgndx,Mgndy,Mcgndx,Mcgndy,MtMapX,MtMapY,MgMapX,MgMapY,MgndMapX,MgndMapY,McgndMapX,McgndMapY
+01243,22350,1,45.0,5.0,-300,0,southernyellowpine,38.5,,-300.0,0.0,300.0,3.141592653589793,19.0,32.5,32.5,72501.0,1847.9414127840348,61625.85,4065.471108124877,2.489383089795587e-13,4065.471108124877,,,,,,,,,,,,,,,,,,,,,,,,,,,
+01243,22369,2,45.0,5.0,300,0,southernyellowpine,38.5,,300.0,0.0,300.0,0.0,19.0,32.5,32.5,72501.0,1847.9414127840348,61625.85,4065.471108124877,2.489383089795587e-13,4065.471108124877,,,,,,,,,,,,,,,,,,,,,,,,,,,

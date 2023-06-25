@@ -1,0 +1,4 @@
+StudyPoleTag,PoleTag,PoleNumber,PoleHeight,PoleClass,MapX,MapY,PoleSpecies,GradeHeight,NeutralHeight
+01243,01243,0,40.0,3.0,0.0,0.0,southernyellowpine,34.0,30.5
+01243,22350,1,40.0,3.0,-200.0,0.0,southernyellowpine,34.0,
+01243,22369,2,40.0,3.0,199.51281005196483,13.95129474882506,southernyellowpine,34.0,
