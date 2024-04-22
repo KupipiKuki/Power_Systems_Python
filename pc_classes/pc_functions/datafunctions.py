@@ -65,6 +65,8 @@ def generate_transforms():
 
     Amat = np.mat([[1, 1, 1], [1, a**2, a], [1, a, a**2]])
     Ainv = (1.0/3.0)*np.mat([[1, 1, 1], [1, a, a**2], [1, a**2, a]])
+    
+    #Add 30 degree phase shifts (could be simplified to 0,rect(1,np.pi/6),rect(1,-np.pi/6) and remove squre root )
     compd=(1/np.sqrt(3))*np.array([[0],[(1-a)],[(1-a**2)]])
     compy=(1/np.sqrt(3))*np.array([[0],[(1-a**2)],[(1-a)]])
     

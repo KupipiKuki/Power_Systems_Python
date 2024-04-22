@@ -1,0 +1,2 @@
+StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,MinimumResponse,Adder,LowCurrentCutoff,HighCurrentCutoff,ShowPlot,PlotLabel
+1000,1000-MM,15KS-melt,1,1,1,0,0,0,0,0,10000,1,15KS min melt

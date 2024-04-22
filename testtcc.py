@@ -7,7 +7,7 @@ Created on Tue Sep 10 09:46:06 2019
 #import powercad as pc
 from pc_classes import curvegenerator as cg
 
-testnumber=1
+testnumber=5
 
 testdb={0 : ['tccTest',1,1200,'1200A Max Fault',1,300,'300A Min Fault',1,450,'450A Coord Fault'],
         1 : ['TimeAdderTest',1,7000,'7000A Max Fault',0,1200,'1200A Min Fault',1,5000,'5000A Coord Fault'],

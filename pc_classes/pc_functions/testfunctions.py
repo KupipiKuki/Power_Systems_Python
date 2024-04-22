@@ -206,6 +206,35 @@ def testIsNotNumberRange(testval, low, high):
         errMsg='Value entered is not a valid number'
     return errMsg
 
+def testIsNotNumberRangeBool(testval, low, high):
+    testState=0
+    errMsg=True
+    try:
+        if type(testval)==int:
+            testState=1
+        elif type(testval)==float:
+            testState=2
+        elif type(testval)==str:
+            if int(float(testval))==testval:
+                testval=int(testval)
+                testState=1
+            else:
+                #if its not a valid float the exception will trigger the default error string
+                testval=float(testval)
+                testState=2
+        else:
+            testState=0
+    except:
+        testState=0
+    
+    if testState==1:
+        if (testval>=int(low)) & (testval<=int(high)):
+           return True
+    elif testState==2:
+        if (testval>=float(low)) & (testval<=float(high)):
+           return True
+    return False
+
 #Function variant based on above for non decimal, works well jcheers 2022
 def testIsNotIntRange(testval, low, high):
     testState=0

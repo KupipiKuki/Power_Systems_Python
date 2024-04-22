@@ -1,0 +1,3 @@
+StudyPoleTag,DevTag,CurveRef,iPickup,ctRatio,TimeDial,iPickupInst,Delay,MinimumResponse,Adder,LowCurrentCutoff,HighCurrentCutoff,ShowPlot,PlotLabel
+1000,1000-3D,3D,1,1,1,0,0,0,0,0,10000,1,3D clear
+1000,1000-10KS,10KS-melt,1,1,1,0,0,0,0,0,10000,1,10KS min melt
