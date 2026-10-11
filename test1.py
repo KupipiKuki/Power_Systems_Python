@@ -26,6 +26,10 @@ config=PoleCalcConfig(
 pcc=poleCalculationClass(config)
 pcc.run(plot_format='pdf')
 
-fcc=pcd.faultCalculationClass()
-fcc.calcImpedanceLaunch(projectdir,projectname,60,3)
+fcc=pcd.faultCalculationClass(pcd.PowerCalcConfig(
+    project_name=projectname,
+    project_dir=projectdir,
+    frequency=60,
+    environmenttype=3))
+fcc.run()
 print(fcc.xfmr(150,8,False,'rand',1))

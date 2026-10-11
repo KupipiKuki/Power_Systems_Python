@@ -66,3 +66,27 @@ Rebuilds pole-top profiles as R12 DXF from construction CSV rows, for visual ver
 4. **14.4kV audit** vs the V-prefix drawings in bulletin 804 (same OCR method; page map already built — `/tmp/page_map.json` was session-local, regenerate if needed).
 5. Consider a real test suite (golden-file comparison of `PoleResults/*.csv`).
 6. PR #1 is draft — review/merge decision pending with the user.
+
+---
+
+# Handoff addendum (session 3): powercad refactor
+
+**Branch:** `vibe/powercad-refactor` (off `vibe/polecad-refactor-c349b2`).
+`pc_classes/powercad.py` refactored in the polecad style:
+
+- New API: `PowerCalcConfig` dataclass + `faultCalculationClass(config).run()`
+  (replaces `calcImpedanceLaunch`/`calcVoltDropLaunch`; loads poledb/conddb,
+  runs `calcCurrent` + `calcImpedance`, writes `condfcc.csv`).
+- Typed exceptions (`PowerCalcError` hierarchy), no silent defaults; assembly
+  lookup scoped by `voltage_family` with a single shared `_find_assembly`.
+- Bugs fixed: spacing formula `+` vs `-` (F1), conddb Span ft-as-miles (F2),
+  B-table AltName fallback (F3), wrong per-section span (F4), pandas-3 int
+  Span crash (F5). Details + every suspect-but-unchanged calculation in
+  **`POWERCAD_AUDIT.md`** (items A1–A9) — user chose "refactor + flag";
+  A-items await the user's revised calculation documentation.
+- Consumers updated: `temptest1.py`, `temptest2.py`, `test1.py`,
+  `xfmrTest.py`, `VoltageDropTest.py`; `condfcc.csv` baselines regenerated.
+- Verified: all example scripts run clean on pandas 3.0.6/numpy 2.5.4;
+  unchanged quantities (CurrentCalc, OhmsCalc, GMR...) match legacy baselines;
+  changed quantities trace to F1/F2/F4 and were sanity-checked against
+  construction CSV geometry.
