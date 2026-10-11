@@ -46,7 +46,18 @@ _GUY_CALC_COLUMNS = ['Mtx', 'Mty', 'GuyMapX', 'GuyMapY', 'GuyTension']
 _WOOD_FIBER_STRESS = 8000.0
 _MOMENT_CONSTANT = 0.000264
 
-_ASSEMBLY_KEYS = {'A': '7200_A', 'B': '7200_B', 'C': '7200_C'}
+# Assembly tables by construction family. The key is the voltage family
+# prefix used in project assembly names.
+_CONSTRUCTION_FAMILIES = {
+    '7200': ('7200_A', '7200_B', '7200_C'),
+    '14400': ('14400_A', '14400_B', '14400_C', '14400_D'),
+    '34500_46000': ('34500_46000',),
+    '69000': ('69000',),
+}
+
+# Letter prefix within a family -> phase slots available in that table
+# (the rest fall back to the neutral slot).
+_FAMILY_TABLE_LETTERS = {'7200': 'ABC', '14400': 'ABCD'}
 
 
 @dataclass
@@ -62,6 +73,7 @@ class PoleCalcConfig:
     ice_thickness: float
     wind_angle: float
     deflection_factor: float
+    voltage_family: str = '7200'
     override_span: bool = False
     override_angle: bool = False
 
@@ -73,6 +85,10 @@ class PoleCalcConfig:
             value = getattr(self, name)
             if not isinstance(value, numbers.Real) or pd.isna(value):
                 raise ValueError(f'{name} must be a number, got {value!r}')
+        if self.voltage_family not in _CONSTRUCTION_FAMILIES:
+            raise ValueError(
+                f'Unknown voltage family {self.voltage_family!r}, '
+                f'expected one of {sorted(_CONSTRUCTION_FAMILIES)}')
 
 
 class PoleCalcError(Exception):
@@ -125,48 +141,63 @@ class poleCalculationClass:
         self.constructions = dfn.generate_pole_construction()
         self.conductordb = dfn.generate_conductor_database()
         self.cabledb = dfn.generate_cable_database()
+        family = self.cfg.voltage_family
+        self._family_tables = [self.constructions[key]
+                               for key in _CONSTRUCTION_FAMILIES[family]
+                               if key in self.constructions]
+        if not self._family_tables:
+            raise MissingColumnError(
+                f'No construction tables found for family {family!r}')
 
     # ------------------------------------------------------------------
     # Assembly / attachment height resolution
     # ------------------------------------------------------------------
 
     def _find_assembly(self, name):
-        letter = str(name).strip().upper()[0]
-        if letter not in _ASSEMBLY_KEYS:
+        name = str(name).strip()
+        matches = []
+        for table in self._family_tables:
+            if 'Name' not in table.columns:
+                continue
+            match = table.loc[table['Name'] == name]
+            if match.empty:
+                match = table.loc[table['Name'].str.contains(name, na=False,
+                                                             regex=False)]
+            if match.empty and 'AltName' in table.columns:
+                match = table.loc[table['AltName'] == name]
+            if match.empty and 'AltName' in table.columns:
+                match = table.loc[table['AltName'].str.contains(name, na=False,
+                                                                regex=False)]
+            if not match.empty:
+                matches.append(match.iloc[0])
+        if not matches:
             raise UnknownAssemblyError(
-                f'Unknown assembly prefix {name!r}, expected A, B, or C')
-        table = self.constructions[_ASSEMBLY_KEYS[letter]]
-        if 'Name' not in table.columns:
-            raise MissingColumnError(f'construction table for {letter} has no Name column')
-        match = table.loc[table['Name'] == name]
-        if match.empty:
-            match = table.loc[table['Name'].str.contains(name, na=False, regex=False)]
-        if match.empty and 'AltName' in table.columns:
-            match = table.loc[table['AltName'] == name]
-        if match.empty and 'AltName' in table.columns:
-            match = table.loc[table['AltName'].str.contains(name, na=False, regex=False)]
-        if match.empty:
+                f'Assembly {name!r} not found in construction family '
+                f'{self.cfg.voltage_family!r}')
+        if len(matches) > 1:
+            found_in = [m['Name'] for m in matches]
             raise UnknownAssemblyError(
-                f'Assembly {name!r} not found in construction database')
-        return match.iloc[0]
+                f'Assembly {name!r} is ambiguous in family '
+                f'{self.cfg.voltage_family!r}: matched {found_in}')
+        return matches[0]
 
     @staticmethod
-    def _conductor_height_column(letter, position):
-        if position == 0:
-            return 'Phase1Hin'
-        if position == 1 and letter in ('B', 'C'):
-            return 'Phase2Hin'
-        if position == 2 and letter == 'C':
-            return 'Phase3Hin'
-        return 'NeutralHin'
+    def _conductor_height_column(asm, position):
+        position = int(position) + 1
+        column = f'Phase{position}Hin'
+        if column in asm.index and not pd.isna(asm[column]):
+            return column
+        if 'NeutralHin' in asm.index and not pd.isna(asm['NeutralHin']):
+            return 'NeutralHin'
+        return None
 
     @staticmethod
-    def _guy_height_column(letter, position):
-        slots = {'A': ['GuyH1', 'GuyH2'],
-                 'B': ['GuyH1', 'GuyH2', 'GuyH3'],
-                 'C': ['GuyH1', 'GuyH2', 'GuyH3', 'GuyH4']}
-        table = slots[letter]
-        return table[position] if position < len(table) else table[-1]
+    def _guy_height_column(asm, position):
+        position = int(position) + 1
+        for column in (f'GuyH{position}', 'GuyH1'):
+            if column in asm.index and not pd.isna(asm[column]):
+                return column
+        return None
 
     # ------------------------------------------------------------------
     # Data loading and preparation
@@ -239,12 +270,12 @@ class poleCalculationClass:
                     raise PoleCalcError(
                         f'No Height and no Assembly for conductor row {row_index}')
                 asm = self._find_assembly(name)
-                letter = name.strip().upper()[0]
-                column = self._conductor_height_column(letter, row_index[2])
-                offset = asm[column]
-                if pd.isna(offset):
+                column = self._conductor_height_column(asm, row_index[2])
+                if column is None:
                     raise UnknownAssemblyError(
-                        f'Assembly {name!r} has no {column} for position {row_index[2]}')
+                        f'Assembly {name!r} has no usable attachment height '
+                        f'for position {row_index[2]}')
+                offset = asm[column]
                 self.conddb.at[row_index, 'Height'] = (
                     study_grade + offset / 12.0 + row['AssemblyHeight'])
             height = self.conddb.at[row_index, 'Height']
@@ -291,22 +322,26 @@ class poleCalculationClass:
         for column in ('GuyHeight', 'GuyType', 'GuyX', 'GuyY', 'GuyTension'):
             if column not in db.columns:
                 db[column] = np.nan
+        # GuyHeight may hold assembly names (strings) to resolve against the
+        # construction tables; keep unresolved names aside while the column
+        # is converted to numeric for the computed values.
+        name_heights = {index: row['GuyHeight'] for index, row in db.iterrows()
+                        if isinstance(row['GuyHeight'], str)
+                        and row['GuyHeight'].strip()}
+        if name_heights:
+            db['GuyHeight'] = pd.to_numeric(db['GuyHeight'], errors='coerce')
         for row_index, row in db.iterrows():
             key = (row_index[0], row_index[0], 0)
             if _is_positive(row['GuyHeight']):
                 continue
-            if isinstance(row['GuyHeight'], str) and row['GuyHeight'].strip():
-                asm = self._find_assembly(row['GuyHeight'])
-                letter = row['GuyHeight'].strip().upper()[0]
-                column = self._guy_height_column(letter, row_index[2])
+            if row_index in name_heights:
+                asm = self._find_assembly(name_heights[row_index])
+                column = self._guy_height_column(asm, row_index[2])
+                if column is None:
+                    raise UnknownAssemblyError(
+                        f'Assembly {name_heights[row_index]!r} has no guy height '
+                        f'for position {row_index[2]}')
                 offset = asm[column]
-                if pd.isna(offset):
-                    fallback = asm['GuyH1']
-                    if pd.isna(fallback):
-                        raise UnknownAssemblyError(
-                            f'Assembly {row["GuyHeight"]!r} has no guy height '
-                            f'for position {row_index[2]}')
-                    offset = fallback
                 db.at[row_index, 'GuyHeight'] = (
                     self.poledb.at[key, 'GradeHeight'] + offset / 12.0)
             elif is_comms:
@@ -475,7 +510,8 @@ class poleCalculationClass:
         for pole_key, pole in self.polecalc.iterrows():
             try:
                 guys = db.xs((pole_key[0], pole_key[1]),
-                             level=['StudyPoleTag', 'PoleTag'])
+                             level=['StudyPoleTag', 'PoleTag'],
+                             drop_level=False)
             except KeyError:
                 continue
             mt_x, mt_y = ((pole['Mtcx'], pole['Mtcy']) if is_comms

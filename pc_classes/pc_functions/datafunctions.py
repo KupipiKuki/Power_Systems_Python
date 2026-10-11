@@ -28,9 +28,9 @@ def generate_pole_data():
 
 def generate_pole_construction():
 
-    const = {'7200_A' : pd.read_csv(_DATA_DIR / 'Construction' / '7200_A.csv'),
-             '7200_B' : pd.read_csv(_DATA_DIR / 'Construction' / '7200_B.csv'),
-             '7200_C' : pd.read_csv(_DATA_DIR / 'Construction' / '7200_C.csv')}
+    const = {}
+    for path in sorted((_DATA_DIR / 'Construction').glob('*.csv')):
+        const[path.stem] = pd.read_csv(path)
     
     return const
 

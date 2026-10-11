@@ -1,0 +1,3 @@
+StudyPoleTag,PoleTag,PoleNumber,Assembly,AssemblyHeight,ConductorType,ConductorName,Height
+V1,N1,0,"VA1.1,VA2.1",0.0,ACSR,Merlin,
+V1,N1,1,"VA1.2,VA2.2",0.0,ACSR,Merlin,
