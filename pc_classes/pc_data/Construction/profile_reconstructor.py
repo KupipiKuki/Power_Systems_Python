@@ -49,8 +49,28 @@ XARM_HEIGHT = 3.5
 XARM_THICK = 4.625
 XARM_LEN_8FT = 96.0
 XARM_LEN_10FT = 120.0
-PIN_HEIGHT = 8.0
 CONDUCTOR_SYMBOL_R = 2.0
+
+# Insulator assumptions from General Notes.txt (inches to conductor seat).
+# The CSV Hin/Hout values already bake these heights in: e.g. 7200 A1.1
+# (pin) = 4"+5" = 9, A1.1P (post) = 12; 14400 VA1.1 (pin) = 5"+5" = 10,
+# VA1.1P (post) = 14. These constants are used to DRAW the hardware
+# between the mounting surface and the conductor seat at Hin.
+INSULATORS = {
+    '7200': {'post': 12.0, 'pin': 9.0, 'spool': 1.0625},
+    '14400': {'post': 14.0, 'pin': 10.0, 'spool': 1.5},
+    '34500': {'post': 16.0, 'pin': 12.5, 'spool': 1.5},
+    '46000': {'post': 20.0, 'pin': 12.5, 'spool': 1.5},
+    '69000': {'post': 26.0, 'pin': 12.5, 'spool': 1.5},
+}
+
+def insulator_heights(csv_name):
+    """Pick the insulator set for a construction table from its file name."""
+    stem = os.path.basename(csv_name).replace('.csv', '')
+    for key in sorted(INSULATORS, key=len, reverse=True):
+        if stem.startswith(key) or key in stem:
+            return INSULATORS[key]
+    return INSULATORS['7200']
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          '..', 'PoleData')
@@ -101,7 +121,8 @@ def pole_geometry(species=None, pole_class=None, pole_height=None):
     return POLE_TOP_WIDTH, POLE_LENGTH, POLE_TAPER, None
 
 
-def draw_profile(row, name, species=None, pole_class=None, pole_height=None):
+def draw_profile(row, name, species=None, pole_class=None, pole_height=None,
+                 csv_name=None):
     """Build a Drawing for one assembly row (row: pandas Series)."""
     d = Drawing()
     d.add_layer('POLE', color=7)
@@ -142,6 +163,8 @@ def draw_profile(row, name, species=None, pole_class=None, pole_height=None):
                    (xarm_len / 2, -XARM_HEIGHT), layer='XARM')
 
     # Phases
+    ins = insulator_heights(csv_name or '')
+    is_post = 'P' in str(name).replace(',', '').split(' ') or str(name).rstrip().endswith('P')
     for slot in parse_slots(row.index):
         hin = row.get(f'{slot}Hin')
         xoff = row.get(f'{slot}X')
@@ -149,6 +172,13 @@ def draw_profile(row, name, species=None, pole_class=None, pole_height=None):
             continue
         y = -float(hin)
         x = 0.0 if pd.isna(xoff) else float(xoff)
+        # insulator hardware from mounting surface to conductor seat
+        hw_h = ins['post'] if is_post else ins['pin']
+        if has_xarm and abs(x) > top_half:
+            mount_y = -XARM_HEIGHT          # crossarm top
+        else:
+            mount_y = 0.0 if not is_post else -0.0
+        d.add_rect((x - 0.75, y), (x + 0.75, y + hw_h), layer='XARM')
         d.add_circle((x, y), CONDUCTOR_SYMBOL_R, layer='CONDUCTOR')
         d.add_text((x + 3, y - 1), slot, height=2.5, align='left',
                    layer='LABELS')
@@ -163,6 +193,7 @@ def draw_profile(row, name, species=None, pole_class=None, pole_height=None):
         y = -float(nhin)
         nx = row.get('NeutralX')
         x = 0.0 if pd.isna(nx) else float(nx)
+        d.add_rect((x - 1.5, y), (x + 1.5, y + ins['spool']), layer='NEUTRAL')
         d.add_circle((x, y), CONDUCTOR_SYMBOL_R, layer='NEUTRAL')
         d.add_text((x + 3, y - 1), 'N', height=2.5, align='left',
                    layer='LABELS')
@@ -223,7 +254,7 @@ def main():
         os.makedirs(outdir, exist_ok=True)
         for _, row in df.iterrows():
             d = draw_profile(row, row['Name'], args.species, args.pole_class,
-                             args.pole_height)
+                             args.pole_height, csv_name=args.csvfile)
             safe = str(row['Name']).replace('/', '_').replace(',', '_')
             path = os.path.join(outdir, f'{safe}.dxf')
             d.save_dxf(path)
@@ -243,7 +274,7 @@ def main():
         raise SystemExit(1)
     row = match.iloc[0]
     d = draw_profile(row, row['Name'], args.species, args.pole_class,
-                             args.pole_height)
+                             args.pole_height, csv_name=args.csvfile)
     d.save_dxf(args.out)
     print('wrote', args.out)
 
