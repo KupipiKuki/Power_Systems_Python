@@ -37,6 +37,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from minicad_dxf import Drawing  # noqa: E402
 
 SCALE = 1.0
+# Attachment X offsets are measured from the POLE CENTERLINE (z axis):
+# pole diameter never enters the coordinate data since the crossarm is a
+# fixed-width member regardless of pole class. The pole outline below is
+# therefore presentation-only; supply --species/--pole-class to draw the
+# true diameter from the PoleData tables, otherwise a generic outline is used.
 POLE_TOP_WIDTH = 8.5
 POLE_LENGTH = 120.0
 POLE_TAPER = 0.23
@@ -46,6 +51,9 @@ XARM_LEN_8FT = 96.0
 XARM_LEN_10FT = 120.0
 PIN_HEIGHT = 8.0
 CONDUCTOR_SYMBOL_R = 2.0
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'PoleData')
 
 
 def parse_slots(columns):
@@ -58,7 +66,42 @@ def parse_slots(columns):
     return slots
 
 
-def draw_profile(row, name):
+def pole_geometry(species=None, pole_class=None, pole_height=None):
+    """Return (top_width_in, length_in, taper_in_per_ft, butt_width_in).
+
+    Uses the real PoleData circumference tables when species/class/height are
+    given; otherwise falls back to the generic presentation outline. The
+    conductor X/Y coordinates are unaffected: they are centerline-based.
+    """
+    if species and pole_class and pole_height:
+        path = os.path.join(_DATA_DIR, f'{species}.csv')
+        if os.path.isfile(path):
+            hdr = pd.read_csv(path, header=None, nrows=1).iloc[0].tolist()
+            classes = [str(c).strip("'").strip() for c in hdr[2:]]
+            if str(pole_class) in classes:
+                col = 2 + classes.index(str(pole_class))
+                df = pd.read_csv(path, header=None, skiprows=3)
+                row = df.loc[df[0] == float(pole_height)]
+                if not row.empty:
+                    circ = float(row.iloc[0][col])
+                    if not pd.isna(circ):
+                        # circumference at 6 ft from butt -> diameter there;
+                        # tip circumference comes from the header row's
+                        # per-class tip entry (row index 1)
+                        tip = pd.read_csv(path, header=None, skiprows=1,
+                                          nrows=1).iloc[0]
+                        tip_circ = tip[col]
+                        top_w = (float(tip_circ) / math.pi
+                                 if not pd.isna(tip_circ)
+                                 else POLE_TOP_WIDTH)
+                        # circumference at 6ft from butt is near the butt;
+                        # use it for the butt width
+                        butt_w = circ / math.pi
+                        return top_w, float(pole_height) * 12.0, None, butt_w
+    return POLE_TOP_WIDTH, POLE_LENGTH, POLE_TAPER, None
+
+
+def draw_profile(row, name, species=None, pole_class=None, pole_height=None):
     """Build a Drawing for one assembly row (row: pandas Series)."""
     d = Drawing()
     d.add_layer('POLE', color=7)
@@ -69,11 +112,21 @@ def draw_profile(row, name):
     d.add_layer('DIMS', color=8)
     d.add_layer('LABELS', color=7)
 
-    # Pole: top at y=0, drawn downward (negative y = below pole top)
-    top_half = POLE_TOP_WIDTH / 2
-    butt_half = top_half + POLE_TAPER * (POLE_LENGTH / 12.0)
-    d.add_polyline([(-top_half, 0), (-butt_half, -POLE_LENGTH),
-                    (butt_half, -POLE_LENGTH), (top_half, 0)],
+    # Pole: top at y=0, drawn downward (negative y = below pole top).
+    # Outline is presentation-only; attachment coordinates are centerline
+    # (z-axis) based and independent of pole diameter.
+    top_width, pole_len, taper, butt_width = pole_geometry(
+        species, pole_class, pole_height)
+    top_half = top_width / 2
+    if butt_width is not None:
+        butt_half = butt_width / 2
+    elif taper is not None:
+        butt_half = top_half + taper * (pole_len / 12.0)
+    else:
+        # uniform taper approximation from RUS pole dimensions
+        butt_half = top_half + 0.23 * (pole_len / 12.0)
+    d.add_polyline([(-top_half, 0), (-butt_half, -pole_len),
+                    (butt_half, -pole_len), (top_half, 0)],
                    closed=False, layer='POLE')
     # pole top cap
     d.add_line((-top_half, 0), (top_half, 0), layer='POLE')
@@ -149,6 +202,12 @@ def main():
     ap.add_argument('--list', action='store_true', help='list names')
     ap.add_argument('--all', action='store_true',
                     help='render every row to out dir')
+    ap.add_argument('--species', default=None,
+                    help='pole species file stem from PoleData (outline only)')
+    ap.add_argument('--pole-class', default=None,
+                    help='pole class (outline only)')
+    ap.add_argument('--pole-height', default=None,
+                    help='pole length in feet (outline only)')
     args = ap.parse_args()
 
     df = pd.read_csv(args.csvfile)
@@ -163,7 +222,8 @@ def main():
         outdir = args.out or os.path.join(here, 'profiles')
         os.makedirs(outdir, exist_ok=True)
         for _, row in df.iterrows():
-            d = draw_profile(row, row['Name'])
+            d = draw_profile(row, row['Name'], args.species, args.pole_class,
+                             args.pole_height)
             safe = str(row['Name']).replace('/', '_').replace(',', '_')
             path = os.path.join(outdir, f'{safe}.dxf')
             d.save_dxf(path)
@@ -182,7 +242,8 @@ def main():
         print(f'Assembly {args.name!r} not found in {args.csvfile}')
         raise SystemExit(1)
     row = match.iloc[0]
-    d = draw_profile(row, row['Name'])
+    d = draw_profile(row, row['Name'], args.species, args.pole_class,
+                             args.pole_height)
     d.save_dxf(args.out)
     print('wrote', args.out)
 
