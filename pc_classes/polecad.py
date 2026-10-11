@@ -10,7 +10,6 @@ import numbers
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -584,105 +583,6 @@ class poleCalculationClass:
     # Reporting
     # ------------------------------------------------------------------
 
-    def _pole_summary(self, pole):
-        resist = pole['Mr']
-        mgx = 0.0 if pd.isna(pole['Mgx']) else pole['Mgx']
-        mgy = 0.0 if pd.isna(pole['Mgy']) else pole['Mgy']
-        mcgx = 0.0 if pd.isna(pole['Mcgx']) else pole['Mcgx']
-        mcgy = 0.0 if pd.isna(pole['Mcgy']) else pole['Mcgy']
-        gnd_moment = np.hypot(pole['Mgndx'] + mgx, pole['Mgndy'] + mgy) \
-            * self.cfg.deflection_factor
-        bgnd = np.hypot(pole['Mgndx'], pole['Mgndy'])
-        guy_moment = np.hypot(mgx, mgy)
-        cgnd_moment = np.hypot(pole['Mcgndx'] + mcgx, pole['Mcgndy'] + mcgy) \
-            * self.cfg.deflection_factor
-        bcgnd = np.hypot(pole['Mcgndx'], pole['Mcgndy'])
-        cguy_moment = np.hypot(mcgx, mcgy)
-        total = np.hypot(pole['Mgndx'] + mgx + pole['Mcgndx'] + mcgx,
-                         pole['Mgndy'] + mgy + pole['Mcgndy'] + mcgy)
-        return {
-            'Pole Strength': round(resist, 1),
-            'Utility Moment': bgnd,
-            'Utility Guyed Moment': guy_moment,
-            'Total Utility Moment': gnd_moment,
-            'Communications Moment': bcgnd,
-            'Communications Guyed Moment': cguy_moment,
-            'Total Communications Moment': cgnd_moment,
-            'Overall Pole Moment': total,
-            'Guy Required': total / resist > 0.8,
-        }
-
-    def _plot_poles(self, out_dir, file_format):
-        if file_format not in ('pdf', 'png'):
-            raise ValueError(f'plot format must be "pdf" or "png", got {file_format!r}')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        rows = {}
-        for pole_key, pole in self.polecalc.iterrows():
-            summary = self._pole_summary(pole)
-            rows[pole_key[0]] = summary
-            fig_width, fig_height = 8.5, 11
-            span = np.nanmax(self.poleNocalc.xs(pole_key[0],
-                                                level='StudyPoleTag')['Span'])
-            xlim = np.ceil(span / 100) * 100
-            ylim = np.ceil((fig_height / fig_width) * span / 100) * 100
-            fig = plt.figure(figsize=(fig_width, fig_height), dpi=80,
-                             facecolor='w', edgecolor='k')
-            ax = fig.add_subplot(111)
-            study = self.polecalc.xs(pole_key[0], level='StudyPoleTag')
-            poles = self.poleNocalc.xs(pole_key[0], level='StudyPoleTag')
-            study.plot(kind='scatter', x='MapX', y='MapY', color='g', ax=ax,
-                       marker='o', s=250, label='Study Pole')
-            poles.plot(kind='scatter', x='MapX', y='MapY', color='c', ax=ax,
-                       marker='o', label='Poles')
-            study.plot(kind='scatter', x='MtMapX', y='MtMapY', color='r', ax=ax,
-                       marker='x', s=100, label='Conductor Tension Moment')
-            study.plot(kind='scatter', x='McgndMapX', y='McgndMapY', color='m', ax=ax,
-                       marker='x', s=100, label='Communications Ground Moment')
-            study.plot(kind='scatter', x='MgndMapX', y='MgndMapY', color='orange',
-                       ax=ax, marker='x', s=100,
-                       label='Ground Moment\nNot Including Communications')
-            try:
-                self.guydb.xs(pole_key[0], level='StudyPoleTag').plot(
-                    kind='scatter', x='GuyMapX', y='GuyMapY', color='k', ax=ax,
-                    marker='+', s=100, label='Guy Location')
-            except KeyError:
-                pass
-            ax.set_xlim(pole['MapX'] - xlim, pole['MapX'] + xlim)
-            ax.set_ylim(pole['MapY'] - ylim, pole['MapY'] + ylim)
-            ax.arrow(0.7, 0.3,
-                     0.05 * np.cos(self.cfg.wind_angle + np.pi),
-                     0.05 * np.sin(self.cfg.wind_angle + np.pi),
-                     head_width=0.01, head_length=0.01, transform=ax.transAxes,
-                     label='Wind')
-            text_y = 0.315 if self.cfg.wind_angle < np.pi else 0.285
-            ax.text(0.7, text_y, 'Wind', transform=ax.transAxes,
-                    horizontalalignment='center')
-            ax.legend(loc=0)
-            ax.set_title(f'{self.cfg.project_name} Pole {pole_key[0]}')
-            ax.set_xlabel('Map X Coordinates')
-            ax.set_ylabel('Map Y Coordinates')
-            fig.text(0.1, 0.985, f"Resisting Moment: {pole['Mr']:.1f}", fontsize=8)
-            fig.text(0.1, 0.97, f"Ground Moment: {summary['Total Utility Moment']:.1f}", fontsize=8)
-            fig.text(0.1, 0.955,
-                     f"Communications Ground Moment: {summary['Total Communications Moment']:.1f}",
-                     fontsize=8)
-            fig.text(0.1, 0.91,
-                     f"Pole : {pole['PoleHeight']}-{pole['PoleClass']}, "
-                     f"{pole['PoleSpecies']}, {pole['GradeHeight']} Feet Above Grade",
-                     fontsize=8)
-            fig.text(0.6, 0.985, f'Design Tension: {self.cfg.design_tension}, '
-                                  f'Tension Overload: {self.cfg.tension_overload}', fontsize=8)
-            fig.text(0.6, 0.97, f'Wind Load: {self.cfg.wind_load}, '
-                                 f'Wind Overload: {self.cfg.wind_overload}', fontsize=8)
-            fig.text(0.6, 0.955, f'Strength Factor: {self.cfg.strength_factor}', fontsize=8)
-            fig.text(0.6, 0.94, f'Ice Thickness: {self.cfg.ice_thickness}', fontsize=8)
-            fig.text(0.6, 0.925, f'Deflection Factor: {self.cfg.deflection_factor}', fontsize=8)
-            plt.savefig(out_dir / f'{pole_key[0]}.{file_format}',
-                       facecolor='w', edgecolor='w', bbox_inches='tight',
-                       pad_inches=0.5)
-            plt.close()
-        self.polesummary = pd.DataFrame.from_dict(rows, orient='index')
-
     def _write_results(self, out_dir):
         out_dir.mkdir(parents=True, exist_ok=True)
         self.poleNocalc.filter(['PoleTag', 'PoleHeight', 'PoleClass',
@@ -727,7 +627,11 @@ class poleCalculationClass:
         self.cguydb = self._calculate_guy(self.cguydb, is_comms=True)
         self._calculate_total_moments()
         if plot_format:
-            self._plot_poles(self.cfg.path / 'PolePlots', plot_format)
+            from .poleplotter import polePlotterClass
+            plotter = polePlotterClass(self.cfg.project_name, self.cfg)
+            self.polesummary = plotter.plot_poles(
+                self.polecalc, self.poleNocalc, self.guydb,
+                self.cfg.path / 'PolePlots', plot_format)
         self._write_results(self.cfg.path / 'PoleResults')
         return self.polecalc
 
