@@ -90,3 +90,93 @@ Rebuilds pole-top profiles as R12 DXF from construction CSV rows, for visual ver
   unchanged quantities (CurrentCalc, OhmsCalc, GMR...) match legacy baselines;
   changed quantities trace to F1/F2/F4 and were sanity-checked against
   construction CSV geometry.
+
+---
+
+# Handoff addendum (session 4): Modular Overhead & Underground Impedance, Thermal Ampacity, and Unified Branch Consolidation
+
+**Branch:** `gemini/modular-refactor` (pushed to `origin/gemini/modular-refactor`).  
+**PR:** https://github.com/KupipiKuki/Power_Systems_Python/pull/new/gemini/modular-refactor  
+**Merged Sources:**
+- `origin/vibe/powercad-refactor` (includes all 10 commits from `origin/vibe/polecad-refactor-c349b2`)
+- `origin/testing` (underground cable calculator)
+
+**State:** all work committed and pushed; working tree clean; automated pytest suite passing 11/11 tests; all 7 legacy verification scripts passing.
+
+---
+
+## 1. What was done (this session)
+
+### a) `pc_classes/overhead_lines.py` — NEW standalone module
+Extracted overhead line impedance and capacitance calculations into a pure mathematical module independent of Pandas DataFrame schemas and disk CSV file I/O:
+- **`OverheadLineImpedance`**:
+  - Implements Carson's equations with frequency-scaled earth return resistance $r_d = 1.588 \times 10^{-3} \cdot f$ and reactance coefficient $\omega_{\text{scale}} = 2.0224 \times 10^{-3} \cdot (f / 60)$.
+  - Generalized Kron reduction for arbitrary $M$ neutral and shield conductors ($[Z_{abc}] = [Z_{pp}] - [Z_{pn}] [Z_{nn}]^{-1} [Z_{np}]$).
+  - True matrix symmetrical component sequence transformation using `@`: $Z_{012} = \mathbf{A}^{-1} [Z_{abc}] \mathbf{A}$. Supports both untransposed and transposed configurations.
+- **`OverheadLineCapacitance`**:
+  - Implements Maxwell potential coefficient matrix $[P]$ inversion to shunt capacitance matrix $[C]$ and sequence charging susceptance matrix $[Y_{012}]$ (first time in codebase; previously missing).
+- **Dataclasses**: `OverheadConductor`, `ConductorPosition`, `OverheadGeometry`, `LineImpedanceResult`, `LineAdmittanceResult`.
+
+### b) `pc_classes/underground_cables.py` — full overhaul & bug fixes
+Overhauled the underground cable calculator brought in from branch `testing`:
+- **Defect T-1 (Matrix Multiplication) FIXED**: Replaced Hadamard element-wise multiplication `*` with matrix product `@` in sequence transformation (`zseq = np.linalg.inv(A) @ zabc @ A`). Eliminates the 67% error in zero-sequence impedance.
+- **Defect T-2 (Negative Capacitance / Unit Mismatch) FIXED**: Unified all spatial dimensions ($R_{dc}, R_{ds}, R$) strictly to feet before evaluating $\ln(R / R_{dc})$. Eliminates the negative logarithm bug, guaranteeing strictly positive physical capacitance ($C_{pg} = 1.997 \times 10^{-7}\text{ F/mi} > 0$).
+- **Defect T-3 (GMR vs De Unit Mismatch) FIXED**: Converted conductor diameter and strand diameter to feet for GMR calculation, matching $D_e$ units and eliminating ~25% error in self-reactance.
+- **Defect T-4 (Sequence Extraction) FIXED**: Extracted sequence impedances directly from diagonal elements ($Z_0 = Z_{012}[0,0], Z_1 = Z_{012}[1,1], Z_2 = Z_{012}[2,2]$) instead of non-standard row-summation.
+- **Dataclasses**: Added `CableImpedanceResult` and `CableCapacitanceResult` while maintaining full backward-compatibility with existing class methods.
+
+### c) `pc_classes/thermal_ampacity.py` — NEW standalone module
+Extracted IEEE 738 steady-state heat balance and temperature-corrected resistance from `powercad.py:calcCurrent()`:
+- **`calculate_conductor_ampacity()`**: Computes convective heat loss ($q_c$), radiated heat loss ($q_r$), solar heat gain ($q_s$), temperature-corrected AC and DC resistances ($R_{ac}, R_{dc}$), and maximum continuous current capacity ($I_{\text{max}}$).
+- **Dataclasses**: `AmpacityEnvironment` and `ThermalRatingResult`.
+
+### d) `pc_classes/powercad.py` — decoupling & delegation
+- **Finding B-3 FIXED (Constructor Decoupling)**: Modified `faultCalculationClass.__init__(self, config=None)`. Calling with zero arguments initializes transformation matrices and lookup curves, enabling pure calculation methods (`xfmr`, `ifault`, `calcVoltageDrop`, `xrcalc`) to execute standalone without requiring project directories, CSV files, or mock DataFrames.
+- **Ampacity Delegation**: Delegated `_conductor_ampacity` directly to `thermal_ampacity.calculate_conductor_ampacity()`.
+
+### e) Automated unit test harness (`tests/`)
+Created standard pytest test suite (`uv run --with pytest pytest tests/`):
+- `tests/test_thermal_ampacity.py` (4 tests: ACSR ampacity, temperature rise resistance scaling, wind cooling effects, Copper conduction model).
+- `tests/test_underground_cables.py` (4 tests: strictly positive capacitance across all catalog cables, trefoil custom neutral capacitance, true matrix sequence transformation, diagonal extraction).
+- `tests/test_overhead_lines.py` (3 tests: Carson's series impedance, Kron reduction, Maxwell potential shunt admittance/charging susceptance, single-phase loop impedance).
+- **Result**: All 11 unit tests pass (`11 passed in 0.37s`).
+
+---
+
+## 2. What needs to be implemented (immediate next steps)
+
+1. **GUI Facade Integration (`gui/services/impedance.py`)**:
+   - Wire `OverheadLineImpedance` and `CableImpedance` directly into the facade API (`overhead_line_impedance()` and `underground_cable_impedance()`) so GUI and client scripts can compute line and cable parameters without configuring pole projects.
+   - Address remaining Phase 0 Audit blocking facade findings:
+     - **Finding B-1**: Correct row extraction for LL (`iabc[4,0]` / `iabc[5,0]`) and LLG (`iabc[7,0]` / `iabc[8,0]`) in `fault_currents()`.
+     - **Finding B-2**: Fix factor of 3 and scalar/complex subtraction in `source_impedance()` SLG loop.
+2. **Wire Radius/X into `powercad` GMD calcs**:
+   - Wire `Radius` and `X` columns from construction tables into `powercad.py`'s assembly resolver (using the GMD calculation matrix from `General Notes.txt` - currently dead data).
+3. **Automate legacy script regression into `tests/`**:
+   - Port `spantest.py`, `test1.py`, `test14400.py`, `temptest1.py`, and `temptest2.py` into golden pytest test cases comparing `PoleResults/*.csv` and `condfcc.csv` against committed fixtures.
+
+---
+
+## 3. What remains from initial refactors (flagged debt & pending decisions)
+
+### a) From `vibe/polecad-refactor-c349b2` (PR #1)
+- **Git Repository Bloat**: `UEP_Bulletin_1728F-804.pdf` was committed directly into git in commit `81640f3` as **58,405 plain text lines**. Needs `.gitattributes` binary marking or Git LFS tracking before merging to `main`.
+- **`DATA_AUDIT.md` Discrepancies**:
+  - `A6.22` (drawing vs CSV discrepancy).
+  - `B1.15,B2.25` pairing (B1.15 missing from bulletin).
+  - `B1.14,B2.24` pairing mismatch.
+  - Combined `C5.21L/C5.31L` row (separate large-conductor drawing).
+  - `G`-suffix guide entries (`C6.52G/C6.53G`).
+- **14.4 kV Audit**: Verify V-prefix drawings in Bulletin 804 against `14400_A/B/C/D.csv`.
+
+### b) From `vibe/powercad-refactor` (PR #2 / `POWERCAD_AUDIT.md` items A1–A9)
+- **A1 (Single-Phase Line Impedance)**: Legacy formula assumes 1 ft neutral spacing; combined rows (`A5.01`) carry no neutral geometry in CSVs.
+- **A2 (Frequency Scaling)**: Reactance coefficient `_W60 = 2.0224e-3` hardcoded for 60 Hz in legacy `calcImpedance` (fixed in `overhead_lines.py`, legacy path kept as-is for baseline matching).
+- **A3 (Fault Sequence Current Dividers)**: LLG sequence current divider inverted ($I_0 = -I_1 \frac{Z_{0t}}{Z_t + Z_{0t}}$); 3PH fault includes $Z_{\text{gnd}}$ in positive sequence path.
+- **A4 (SLG Denominator)**: Assumes $Z_2 = Z_1$.
+- **A5 (`xrcalc` Low Multipliers)**: Inverted range (`2 - 1.677 = 0.323`).
+- **A6 (Copper Type 1 Resistance)**: Legacy path does not re-scale to operating temperature ($T_{\text{amb}} + T_{\text{rise}}$) (fixed in `thermal_ampacity.py`).
+- **A7 (`calcVoltageDrop`)**: Applies $\sqrt{3}$ line-to-line approximation to per-phase drop.
+- **A8 (Transformer Zero-Sequence Default)**: Assumes $Z_0 = Z_1$ instead of core-type distribution transformer $Z_0 \approx 0.85 Z_1$.
+- **A9 (Kron Reduction Transposition)**: Legacy uses `0.33/0.33/0.33` circulating factor (`fmat`) assuming transposition. `overhead_lines.py` supports both untransposed and transposed modes.
+
