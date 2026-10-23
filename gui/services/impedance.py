@@ -9,7 +9,9 @@ Implementation notes:
   xrcurve interpolation.
 """
 
+import cmath
 import contextlib
+import math
 import os
 
 import numpy as np
@@ -105,9 +107,19 @@ def source_impedance(config):
     if config.explicit_z0 is not None:
         z0 = config.explicit_z0
     elif config.fault_mva_slg is not None:
-        # SLG loop: E/I = Z1 + Z2 + Z0 = 2*Z1 + Z0 (Z2 = Z1, E = 1 pu)
-        z_loop = config.base_mva / config.fault_mva_slg
+        # SLG duty MVA (three-phase equivalent, IEEE C37.010 convention):
+        # S_slg = S_base * |3 / (2*Z1 + Z0)|  =>  |2*Z1 + Z0| = 3*S_base/S_slg.
+        # The loop impedance angle is unknown from magnitude data alone, so
+        # align it with the positive-sequence angle (same X/R as Z1).
+        z_loop_mag = 3.0 * config.base_mva / config.fault_mva_slg
+        theta = cmath.phase(z1) if z1 != 0 else math.pi / 2.0
+        z_loop = cmath.rect(z_loop_mag, theta)
         z0 = z_loop - 2.0 * z1
+        if z0.imag < 0 or z0.real < 0:
+            raise ValueError(
+                "derived zero-sequence impedance is not passive "
+                f"(Z0={z0}); check fault_mva_slg and xr_ratio"
+            )
     else:
         z0 = z1 * config.zero_mult
     return ImpedanceResult(
@@ -129,10 +141,15 @@ def fault_currents(config):
     z0 = sum((pair[1] for pair in config.z_pu), 0j)
     zlt = np.array([[z1], [z0]])
     iabc = engine.ifault(zlt, config.vf_pu, config.zgnd_pu, config.zfault_pu, 0)
+    # ifault blocks are [SLG A-G | LL BC | LLG BC-G | 3ph ABC], phase a on
+    # top of each block. For LL/LLG phase a is unfaulted (zero); the faulted
+    # phase currents are b (rows 4, 7) and c (rows 5, 8).
+    i_ll_b = complex(iabc[4, 0])
+    i_llg_b = complex(iabc[7, 0])
     return FaultResult(
         i_slg_pu=complex(iabc[0, 0]),
-        i_ll_pu=complex(iabc[3, 0]),
-        i_llg_pu=complex(iabc[6, 0]),
+        i_ll_pu=i_ll_b,
+        i_llg_pu=i_llg_b,
         i_3ph_pu=complex(iabc[9, 0]),
         base_amps=config.base_amps,
     )

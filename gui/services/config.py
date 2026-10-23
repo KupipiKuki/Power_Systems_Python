@@ -26,13 +26,26 @@ class TransformerConfig:
     xr_ratio: Optional[float] = None
     zero_mult: float = 1.0
 
+    def __post_init__(self):
+        if self.mva_base <= 0 or self.percent_z <= 0:
+            raise ValueError("mva_base and percent_z must be positive")
+        if self.xr_ratio is not None and self.xr_ratio <= 0:
+            raise ValueError("xr_ratio must be positive")
+        if self.zero_mult < 0:
+            raise ValueError("zero_mult must be non-negative")
+
 
 @dataclass
 class SourceConfig:
     """Bulk electric system (utility source) inputs.
 
     Exactly one of fault_mva_3ph / explicit_z1 must be provided; likewise
-    one of fault_mva_slg / explicit_z0 / zero_from_xr must be provided.
+    exactly one of fault_mva_slg / explicit_z0 / zero_mult must be provided.
+    Providing both of a pair raises ValueError.
+
+    When fault_mva_slg is used, Z0 is derived from the SLG loop with the
+    loop angle aligned to the positive-sequence angle (same X/R as Z1),
+    since magnitude-only duty data cannot determine the Z0 angle.
 
     base_mva:      system base for per-unit conversion, MVA
     base_kv:      base line-to-line voltage at the source bus, kV
@@ -56,8 +69,23 @@ class SourceConfig:
     explicit_z0: Optional[complex] = None
 
     def __post_init__(self):
-        if self.fault_mva_3ph is None and self.explicit_z1 is None:
-            raise ValueError("provide fault_mva_3ph or explicit_z1")
+        if self.base_mva <= 0 or self.base_kv <= 0:
+            raise ValueError("base_mva and base_kv must be positive")
+        for name in ("fault_mva_3ph", "fault_mva_slg", "xr_ratio", "zero_mult"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
+        if (self.fault_mva_3ph is None) == (self.explicit_z1 is None):
+            raise ValueError(
+                "provide exactly one of fault_mva_3ph or explicit_z1"
+            )
+        if (self.fault_mva_slg is not None and self.explicit_z0 is not None) or (
+            self.zero_mult is not None
+            and (self.fault_mva_slg is not None or self.explicit_z0 is not None)
+        ):
+            raise ValueError(
+                "provide exactly one of fault_mva_slg, explicit_z0, or zero_mult"
+            )
         if (
             self.fault_mva_slg is None
             and self.explicit_z0 is None
@@ -87,6 +115,14 @@ class FaultConfig:
     zgnd_pu: float = 0.0
     zfault_pu: float = 0.0
     base_amps: Optional[float] = None
+
+    def __post_init__(self):
+        if not self.z_pu:
+            raise ValueError("z_pu must contain at least one (z1, z0) pair")
+        if self.vf_pu <= 0:
+            raise ValueError("vf_pu must be positive")
+        if self.base_amps is not None and self.base_amps <= 0:
+            raise ValueError("base_amps must be positive")
 
 
 @dataclass

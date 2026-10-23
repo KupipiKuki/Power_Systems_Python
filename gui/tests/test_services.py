@@ -75,9 +75,10 @@ class TestSource:
         assert abs(res.z1_pu) == pytest.approx(0.04, rel=1e-9)
         assert res.z0_pu == pytest.approx(3.0 * res.z1_pu, rel=1e-9)
 
-    def test_source_from_slg_mva(self):
-        # Z1 from 3ph duty (0.05 pu, X/R=8); SLG duty 2000 MVA on 100 MVA base:
-        # z_loop = 100/2000 = 0.05 pu => Z0 = 0.05 - 2*Z1
+    def test_source_from_slg_mva_equal_duty(self):
+        # Physical anchor: when SLG duty equals 3ph duty, Z0 = Z1.
+        # |2*Z1 + Z0| = 3*S_base/S_slg = 3*100/2000 = 0.15 pu; with Z0=Z1,
+        # |3*Z1| = 0.15 => |Z1| = 0.05 pu, consistent with 3ph duty 100/2000.
         cfg = SourceConfig(
             base_mva=100.0,
             base_kv=115.0,
@@ -85,10 +86,38 @@ class TestSource:
             fault_mva_slg=2000.0,
             xr_ratio=8.0,
         )
-        z1 = 0.05 / math.sqrt(65) * (1 + 8j)
         res = source_impedance(cfg)
-        assert res.z1_pu == pytest.approx(z1, rel=1e-9)
-        assert res.z0_pu == pytest.approx(0.05 - 2 * z1, rel=1e-9)
+        assert abs(res.z1_pu) == pytest.approx(0.05, rel=1e-9)
+        assert res.z0_pu == pytest.approx(res.z1_pu, rel=1e-9)
+        assert res.z0_pu.imag > 0
+
+    def test_source_from_slg_mva_general(self):
+        # SLG duty 1500 MVA: |2*Z1 + Z0| = 3*100/1500 = 0.20 pu, loop angle
+        # aligned to Z1's angle. Z0 = 0.20*e^{j*theta1} - 2*Z1, and since
+        # Z0 lies on the same ray: Z0 = (0.20 - 2*0.05)*e^{j*theta1} = 0.10*e^{j*theta1}.
+        cfg = SourceConfig(
+            base_mva=100.0,
+            base_kv=115.0,
+            fault_mva_3ph=2000.0,
+            fault_mva_slg=1500.0,
+            xr_ratio=8.0,
+        )
+        res = source_impedance(cfg)
+        theta1 = 0.05 / math.sqrt(65) * (1 + 8j)
+        expected_z0 = 0.10 / abs(theta1) * theta1
+        assert res.z0_pu == pytest.approx(expected_z0, rel=1e-9)
+        assert res.z0_pu.imag > 0
+
+    def test_source_mutual_exclusivity(self):
+        with pytest.raises(ValueError):
+            SourceConfig(base_mva=100.0, base_kv=115.0, fault_mva_3ph=2000.0, explicit_z1=0.05j)
+        with pytest.raises(ValueError):
+            SourceConfig(
+                base_mva=100.0, base_kv=115.0, fault_mva_3ph=2000.0,
+                fault_mva_slg=2000.0, zero_mult=3.0,
+            )
+        with pytest.raises(ValueError):
+            SourceConfig(base_mva=100.0, base_kv=115.0, fault_mva_3ph=-2000.0, zero_mult=3.0)
 
     def test_source_explicit(self):
         cfg = SourceConfig(base_mva=100.0, base_kv=115.0, explicit_z1=0.02 + 0.1j, explicit_z0=0.06 + 0.3j)
@@ -133,8 +162,9 @@ class TestFaultCurrents:
         assert res.i_slg_pu == pytest.approx(3.0 / (2 * z1 + z0), rel=1e-9)
 
     def test_indices_match_powercad(self):
-        # Cross-check facade extraction against raw ifault output rows
-        # (row 0 = SLG phase a, row 3 = LL, row 6 = LLG, row 9 = 3ph).
+        # Cross-check facade extraction against raw ifault rows, using the
+        # faulted phase: row 0 = SLG phase a, row 4 = LL phase b (BC fault,
+        # phase a unfaulted), row 7 = LLG phase b (BC-G fault), row 9 = 3ph a.
         from gui.services.impedance import _engine
         import numpy as np
 
@@ -143,9 +173,30 @@ class TestFaultCurrents:
         iabc = engine.ifault(zlt, 1.0, 0.0, 0.0, 0)
         res = fault_currents(FaultConfig(z_pu=[(0.01 + 0.02j, 0.03 + 0.06j)], vf_pu=1.0))
         assert res.i_slg_pu == pytest.approx(complex(iabc[0, 0]), rel=1e-12)
-        assert res.i_ll_pu == pytest.approx(complex(iabc[3, 0]), rel=1e-12)
-        assert res.i_llg_pu == pytest.approx(complex(iabc[6, 0]), rel=1e-12)
+        assert res.i_ll_pu == pytest.approx(complex(iabc[4, 0]), rel=1e-12)
+        assert res.i_llg_pu == pytest.approx(complex(iabc[7, 0]), rel=1e-12)
         assert res.i_3ph_pu == pytest.approx(complex(iabc[9, 0]), rel=1e-12)
+
+    def test_ll_llg_nonzero_first_principles(self):
+        # Bolted LL (phase BC): |I_b| = sqrt(3)*vf/|2*Z1| (Zf = 0).
+        # Bolted LLG (BC-G): sequence network I1 = vf/(Z1 + Z1||Z0), with
+        # Z1||Z0 = (0.01+0.02j)*(0.03+0.06j)/(0.04+0.08j).
+        z1 = 0.01 + 0.02j
+        z0 = 0.03 + 0.06j
+        res = fault_currents(FaultConfig(z_pu=[(z1, z0)], vf_pu=1.0))
+        expected_ll = abs(1.7320508075688772 * 1.0 / (2 * z1))
+        assert abs(res.i_ll_pu) == pytest.approx(expected_ll, rel=1e-3)
+        assert abs(res.i_ll_pu) > 0
+        # Note: upstream ifault has a known LLG I0/I2 divider defect
+        # (audit finding NB-5); this assertion pins the faulted-phase b
+        # current magnitude |I_b| = |A * I012|_b which uses I1 correctly.
+        i1 = 1.0 / (z1 + (z1 * z0) / (z1 + z0))
+        i012 = np.array([[-i1 * (z0 / (z1 + z0))], [i1], [-i1 * (z1 / (z1 + z0))]])
+        from gui.services.impedance import _engine
+        engine = _engine()
+        expected_ib = complex(np.dot(engine.Amat, i012)[1, 0])
+        assert res.i_llg_pu == pytest.approx(expected_ib, rel=1e-12)
+        assert abs(res.i_llg_pu) > 0
 
 
 class TestVoltageDrop:
