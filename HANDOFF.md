@@ -180,3 +180,122 @@ Created standard pytest test suite (`uv run --with pytest pytest tests/`):
 - **A8 (Transformer Zero-Sequence Default)**: Assumes $Z_0 = Z_1$ instead of core-type distribution transformer $Z_0 \approx 0.85 Z_1$.
 - **A9 (Kron Reduction Transposition)**: Legacy uses `0.33/0.33/0.33` circulating factor (`fmat`) assuming transposition. `overhead_lines.py` supports both untransposed and transposed modes.
 
+---
+
+# Handoff addendum (session 5): QAQC merge of refactors + test branches
+
+**Branch:** `vibe/qaqc-merge-gemini-refactors` (off `gemini/modular-refactor`).
+**Merged Sources:**
+- `origin/gemini/modular-refactor` (base: polecad + powercad refactors, overhead_lines, underground_cables, thermal_ampacity)
+- `origin/vibe/gui-impedance` (GUI facade API: `gui/services/` with dataclass contracts + tests)
+- `origin/qa/mistral-phase0` (golden regression tests `tests/golden/` + Phase 1 test corpus `docs/qa/phase1_test_cases.md`)
+
+**State:** all work staged; full test suite passing 51 passed + 1 xpassed; all 7 legacy verification scripts passing.
+
+---
+
+## 1. What was done (this session)
+
+### a) Merged GUI facade from `vibe/gui-impedance`
+- `gui/services/config.py`: dataclass contracts (`TransformerConfig`, `SourceConfig`, `FaultConfig`, result types)
+- `gui/services/impedance.py`: facade functions wrapping `faultCalculationClass` (`transformer_impedance`, `source_impedance`, `fault_currents`, `voltage_drop`)
+- `gui/services/__init__.py`: package exports
+- `gui/tests/test_services.py`: 15 facade tests
+- `docs/audit/phase0_gemini_audit.md`: Gemini's Phase 0 audit report
+
+### b) Merged golden regression tests from `qa/mistral-phase0`
+- `tests/golden/test_xfmr_golden.py`: 6 transformer impedance golden tests
+- `tests/golden/test_ifault_golden.py`: 6 fault current golden tests
+- `tests/golden/test_voltage_drop_golden.py`: 5 voltage drop golden tests
+- `tests/golden/test_calc_impedance_golden.py`: 3 line impedance golden tests
+- `tests/golden/fixtures/`: minimal CSV fixtures
+- `docs/qa/phase1_test_cases.md`: Phase 1 test-case corpus (842 lines)
+
+### c) Fixed golden tests for compatibility with refactored codebase
+- **`test_xfmr_golden.py`**: Updated expected X/R values from wrong assumptions (7.4/6.8) to correct GE xrcurve values (21.8 at 20 MVA, 15.8 at 10 MVA). Changed `xfmr(..., False, False, ...)` to use deterministic `xrcalc(mva, 'curve')` instead of stochastic `'rand'` mode.
+- **`test_ifault_golden.py`**: Fixed row count assertion (10 -> 12; ifault returns 4 blocks x 3 phases). Fixed LL fault row index (3 -> 4; row 3 is unfaulted phase A, row 4 is faulted phase B for BC fault).
+- **`test_calc_impedance_golden.py`**: Migrated from removed `calcImpedanceLaunch()` API to `PowerCalcConfig` + `faultCalculationClass(config).run()`.
+
+### d) Wired OverheadLineImpedance and CableImpedance into GUI facade
+- **New config dataclasses** in `gui/services/config.py`:
+  - `OverheadLineConductorConfig`: GMR, diameter, AC/DC resistance
+  - `ConductorPositionConfig`: x_ft, y_ft spatial coordinates
+  - `OverheadLineConfig`: conductors, phases, neutrals, frequency, De, transposed, span
+  - `UndergroundCableConfig`: cable_type, frequency, De, phase_spacing
+  - `LineImpedanceResult`: z1, z0, z2, z_abc (facade result type)
+- **New facade functions** in `gui/services/impedance.py`:
+  - `overhead_line_impedance(config)`: wraps `OverheadLineImpedance.calc_impedance()`
+  - `underground_cable_impedance(config)`: wraps `CableImpedance.Calc_Impedance_Matrix()`
+- **New tests** in `gui/tests/test_services.py`:
+  - `TestOverheadLineImpedance`: 3 tests (3-phase balanced, single-phase, missing conductor error)
+  - `TestUndergroundCableImpedance`: 3 tests (catalog cable, all catalog cables, unknown cable error)
+
+### e) Fixed git repository bloat
+- Added `.gitattributes` marking `*.pdf`, `*.xlsx`, images as `binary`
+- Re-added `UEP_Bulletin_1728F-804.pdf` with binary attribute (was 58,405 plain text lines)
+
+---
+
+## 2. Test results
+
+### Automated test suite (51 passed, 1 xpassed)
+```
+python -m pytest tests/ gui/tests/ tests/golden/ -v
+================= 51 passed, 1 xpassed, 102 warnings in 2.30s ==================
+```
+- `tests/`: 11 unit tests (overhead_lines, thermal_ampacity, underground_cables)
+- `gui/tests/`: 21 facade tests (transformer, source, fault, voltage drop, overhead line, underground cable)
+- `tests/golden/`: 19 golden regression tests + 1 xpassed (xfmr, ifault, voltage drop, calc impedance)
+
+### Legacy verification scripts (all 7 pass)
+| Script | Status |
+|--------|--------|
+| `spantest.py` | PASS |
+| `test1.py` | PASS |
+| `test14400.py` | PASS |
+| `temptest1.py` | PASS |
+| `temptest2.py` | PASS |
+| `xfmrTest.py` | PASS |
+| `VoltageDropTest.py` | PASS |
+
+---
+
+## 3. Phase 0 audit findings status (from `docs/audit/phase0_gemini_audit.md`)
+
+| Finding | Status | Notes |
+|---------|--------|-------|
+| **B-1**: LL/LLG faulted-phase extraction | RESOLVED | `vibe/gui-impedance` branch already fixed (rows 4, 7 instead of 3, 6) |
+| **B-2**: SLG loop factor-3 + complex subtraction | RESOLVED | `vibe/gui-impedance` branch already fixed (cmath.rect with proper angle) |
+| **B-3**: Constructor signature drift | RESOLVED | `gemini/modular-refactor` already has `config=None` default |
+| **NB-1**: Docstring `zero_from_xr` -> `zero_mult` | RESOLVED | Already correct in `vibe/gui-impedance` branch |
+| **NB-2**: Mutual exclusivity validation | RESOLVED | Already validated in `vibe/gui-impedance` branch |
+| **NB-3**: Domain validation | RESOLVED | `__post_init__` checks already present |
+| **NB-4**: `np.mat` monkey-patch | MITIGATED | Shim retained as harmless guard; `datafunctions.py` already uses `np.asmatrix` |
+| **NB-5**: Upstream LLG divider bug | FLAGGED | Documented in `POWERCAD_AUDIT.md` item A3; legacy path kept as-is for baseline matching |
+
+---
+
+## 4. What remains (pending decisions / future work)
+
+### a) Immediate next steps from HANDOFF session 4
+1. **Wire Radius/X into `powercad` GMD calcs** — still pending (construction CSV Radius/X columns are dead data)
+2. **Automate legacy script regression into `tests/`** — golden tests cover xfmr/ifault/voltage-drop/impedance; polecad scripts (spantest, test1, test14400) still run as standalone scripts
+
+### b) Flagged debt from earlier sessions
+- **DATA_AUDIT.md discrepancies** (user review pending): A6.22, B1.15/B1.14 pairings, C5.21L combined row, G-suffix entries
+- **14.4 kV audit** vs V-prefix drawings in Bulletin 804
+- **POWERCAD_AUDIT.md items A1-A9**: await user's revised calculation documentation
+
+### c) Open PRs
+- PR #1 (`vibe/polecad-refactor-c349b2`): draft, review/merge pending
+- PR #2 (`vibe/powercad-refactor`): draft, review/merge pending
+- PR #3 (`vibe/gui-impedance`): draft, Phase 0 audit FAIL -> now resolved in this branch
+
+---
+
+## 5. Environment
+
+- Python 3.12.15, pandas 3.1.0, numpy 2.5.4, matplotlib 3.11.2, scipy 1.18.1, pytest 9.1.1
+- All tests run from repo root: `python -m pytest tests/ gui/tests/ tests/golden/ -v`
+- Legacy scripts need `MPLBACKEND=Agg` for headless execution
+
