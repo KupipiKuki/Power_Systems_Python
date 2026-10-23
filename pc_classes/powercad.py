@@ -24,6 +24,7 @@ import scipy.stats as ssp
 from .pc_functions import dataconstants as dct
 from .pc_functions import datafunctions as dfn
 from .pc_functions import testfunctions as tfn
+from .thermal_ampacity import AmpacityEnvironment, calculate_conductor_ampacity
 
 _INDEX = ['StudyPoleTag', 'PoleTag', 'PoleNumber']
 
@@ -72,18 +73,6 @@ class InvalidGeometryError(PowerCalcError):
 
 
 @dataclass
-class AmpacityEnvironment:
-    """Conductor thermal environment for the ampacity heat balance
-    (IEEE 738-style)."""
-    wind_speed: float = 2.0        # ft/s
-    sun_intensity: float = 96.0    # W/ft^2
-    sun_altitude: float = 90.0     # degrees
-    sun_azimuth: float = 0.0       # degrees
-    conductor_azimuth: float = 0.0  # degrees
-    altitude: float = 1000.0      # conductor elevation above sea level, ft
-
-
-@dataclass
 class PowerCalcConfig:
     """Parameters for the impedance / ampacity study."""
     project_name: str
@@ -126,27 +115,32 @@ def _empty_indexed_frame(columns):
 class faultCalculationClass:
     """Impedance, ampacity, fault and voltage-drop calculation engine."""
 
-    def __init__(self, config):
-        if not isinstance(config, PowerCalcConfig):
-            raise TypeError('faultCalculationClass requires a PowerCalcConfig')
-        self.cfg = config
-
+    def __init__(self, config=None):
         self.Amat, self.Ainv, self.compd, self.compy = dfn.generate_transforms()
         self.conductordb = dfn.generate_conductor_database()
         self.distxfmr = dct.distxfmr
         self.xrcurve = dct.xrcurve
-
         self.constructions = dfn.generate_pole_construction()
-        family = self.cfg.voltage_family
-        self._family_tables = [self.constructions[key]
-                               for key in _CONSTRUCTION_FAMILIES[family]
-                               if key in self.constructions]
-        if not self._family_tables:
-            raise MissingColumnError(
-                f'No construction tables found for family {family!r}')
 
-        self.poledb = _empty_indexed_frame(list(_INDEX))
-        self.conddb = _empty_indexed_frame(list(_INDEX))
+        self.cfg = config
+        if config is not None:
+            if not isinstance(config, PowerCalcConfig):
+                raise TypeError(
+                    f'faultCalculationClass requires a PowerCalcConfig, '
+                    f'got {type(config).__name__}')
+            family = self.cfg.voltage_family
+            self._family_tables = [self.constructions[key]
+                                   for key in _CONSTRUCTION_FAMILIES[family]
+                                   if key in self.constructions]
+            if not self._family_tables:
+                raise MissingColumnError(
+                    f'No construction tables found for family {family!r}')
+            self.poledb = _empty_indexed_frame(list(_INDEX))
+            self.conddb = _empty_indexed_frame(list(_INDEX))
+        else:
+            self._family_tables = []
+            self.poledb = _empty_indexed_frame(list(_INDEX))
+            self.conddb = _empty_indexed_frame(list(_INDEX))
 
     # ------------------------------------------------------------------
     # Data loading
@@ -214,68 +208,16 @@ class faultCalculationClass:
                             tempamb, temprise, env):
         """IEEE 738-style heat balance for one conductor. Returns
         (ampacity, ac resistance ohms/mile at operating temperature)."""
-        conduction = _CONDUCTION_TYPES.get(conductortype, 3)
-
-        resdc = dcohmval / 1000.0
-        resac = acohmval / 1000.0
-        radius = gmrval * 12.0
-        surfaceareaft = 2.0 * np.pi * gmrval
-        surfaceareain = 2.0 * np.pi * radius * 12.0
-        tempcond = temprise + tempamb
-        tf = (tempcond + tempamb) / 2.0
-        pf = (0.080695 - (0.000002901 * env.altitude)
-              + (0.000000000037 * env.altitude ** 2)) / (1 + 0.00367 * tf)
-        uf = (0.0415 + 0.00012034 * tf - 0.00000011442 * tf ** 2
-              + 0.00000000019416 * tf ** 3)
-        kf = 0.007388 + 0.0000227889 * tf - 0.00000000134328 * tf ** 2
-
-        wr = 0.138 * radius * 2 * 0.5 * (((273.0 + tempcond) / 100.0) ** 4
-                                        - ((273.0 + tempamb) / 100.0) ** 4)
-        if env.wind_speed <= 0:
-            wc = 0.283 * np.sqrt(pf) * (radius * 2) ** 0.75 * temprise ** 1.25
-        else:
-            wc1 = (1.01 + 0.371 * ((pf * env.wind_speed * 3600 * radius * 2)
-                                   / uf) ** 0.52) * kf * temprise
-            wc2 = 0.1695 * ((pf * env.wind_speed * 3600 * radius * 2)
-                            / uf) ** 0.6 * kf * temprise
-            wc = max(wc1, wc2)
-
-        angle = env.sun_altitude * np.pi / 180.0
-        ws = 0.5 * env.sun_intensity * np.sin(
-            np.arccos(np.cos(angle)
-                      * np.cos((env.sun_azimuth * np.pi / 180.0)
-                               - (env.conductor_azimuth * np.pi / 180.0)))
-        ) * surfaceareaft
-        wsbase = 0.5 * 100.0 * np.sin(90.0 * np.pi / 180.0) * surfaceareaft
-
-        powerloss = (wc + wr) / surfaceareain
-
-        if conduction == 2:
-            resac = resdc + ((resac - resdc) / (75.0 - 25.0)) * (tempcond - 25.0)
-        elif conduction == 1:
-            resdctemp = resdc * (1 + 0.00381 * (75.0 - 20.0))
-            resacdc = resac / resdctemp
-            resdc = resdc * (1 + 0.00381 * (75.0 - 20.0))
-            resac = resdc * resacdc
-        else:
-            resdctemp = resdc * (1 + 0.00403 * (75.0 - 20.0))
-            resacdc = resac / resdctemp
-            resdc = resdc * (1 + 0.00403 * ((tempamb + temprise) - 20.0))
-            resac = resdc * resacdc
-        ohmval = resac * 5280.0
-
-        currentbase = np.sqrt((37.7 * radius * 2 * powerloss) / resac)
-        if ws == 0:
-            current = currentbase
-        else:
-            if env.wind_speed > 0:
-                current = currentbase * (0.99 - ((0.05 * radius * 2)
-                                                 * (ws / wsbase)))
-            else:
-                current = currentbase * (0.99 - (0.07 * (angle / (np.pi / 2)))
-                                         - ((0.05 * radius * 2)
-                                            * (ws / wsbase)))
-        return current, ohmval
+        result = calculate_conductor_ampacity(
+            gmr_ft=gmrval,
+            dcohm_per_kft=dcohmval,
+            acohm_per_kft=acohmval,
+            conductor_type=conductortype,
+            temp_amb_c=tempamb,
+            temp_rise_c=temprise,
+            env=env,
+        )
+        return result.ampacity_amps, result.r_ac_ohms_per_mile
 
     def _lookup_product(self, product_db, conductor_type, conductor_name,
                         row_index):
