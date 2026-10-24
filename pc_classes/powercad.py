@@ -1,395 +1,446 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Aug 13 07:07:34 2019
+Power system electrical calculations for distribution studies.
 
-(WinPython64-3740)
+Implements conductor ampacity (IEEE 738-style heat balance), phase
+impedance from pole construction geometry (Carson's equations with
+Kron reduction of the neutral), shunt/harness calculations, transformer
+and line impedance modeling, symmetrical-component fault currents, and
+service voltage drop.
 
-Python Version 3.7.4
-Pandas Version 0.24.2
-Numpy Version 1.16.4+mkl
-Matplotlib Version 3.1.1
-
-@author: jcheers
+The calculation engine (dataframe in, dataframe out) is separated from
+CSV reporting so it can be embedded in other projects. Failures raise
+typed exceptions instead of silently defaulting.
 """
 
-import pandas as pd
+import numbers
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
-from cmath import rect
-from cmath import polar
-import re
-from .pc_functions import testfunctions as tfn
-from .pc_functions import datafunctions as dfn
-from .pc_functions import dataconstants as dct
+import pandas as pd
 import scipy.stats as ssp
 
-class faultCalculationClass():
-    
-    def __init__(self):
-        
-        self.wooddata = dfn.generate_pole_data()
-        
-        self.Acon=pd.read_csv('./pc_classes/pc_data/Construction/7200_A.csv')
-        self.Bcon=pd.read_csv('./pc_classes/pc_data/Construction/7200_B.csv')
-        self.Ccon=pd.read_csv('./pc_classes/pc_data/Construction/7200_C.csv')
-        
-        self.conductordb=dfn.generate_conductor_database()
+from .pc_functions import dataconstants as dct
+from .pc_functions import datafunctions as dfn
+from .pc_functions import testfunctions as tfn
+from .thermal_ampacity import AmpacityEnvironment, calculate_conductor_ampacity
 
-        self.Amat,self.Ainv,self.compd,self.compy=dfn.generate_transforms()
-        
-        #Distribution Transformer Data (From RUS data) format kVA,%Z,Z angle (rad),R,X)
+_INDEX = ['StudyPoleTag', 'PoleTag', 'PoleNumber']
+
+_CONDUCTION_TYPES = {'Copper': 1, 'ACCC': 2}
+
+_CONSTRUCTION_FAMILIES = {
+    '7200': ('7200_A', '7200_B', '7200_C'),
+    '14400': ('14400_A', '14400_B', '14400_C', '14400_D'),
+    '34500_46000': ('34500_46000',),
+    '69000': ('69000',),
+}
+
+# 60 Hz earth-return constants (Carson's equivalent depth terms).
+# w: inductive reactance spacing factor coefficient (ohms/mile).
+# resd: earth resistance term (ohms/mile) at 60 Hz.
+_W60 = 2.0224e-3
+_RESD60 = 1.588e-3 * 60.0
+
+# Soil type (environmenttype) -> Carson equivalent depth De (feet).
+_SOIL_DE = {
+    1: 27.9,     # wet
+    2: 882.0,    # swampy
+    3: 2790.0,   # average
+    4: 8820.0,   # dry
+}
+
+
+class PowerCalcError(Exception):
+    """Base class for power calculation errors."""
+
+
+class MissingColumnError(PowerCalcError):
+    """A required column is absent from an input database."""
+
+
+class UnknownAssemblyError(PowerCalcError):
+    """An assembly name could not be resolved in the construction database."""
+
+
+class UnknownConductorError(PowerCalcError):
+    """A conductor type + name pair could not be resolved."""
+
+
+class InvalidGeometryError(PowerCalcError):
+    """Construction geometry needed for impedance is missing."""
+
+
+@dataclass
+class PowerCalcConfig:
+    """Parameters for the impedance / ampacity study."""
+    project_name: str
+    project_dir: str
+    frequency: float = 60.0
+    # Soil type: 1 wet, 2 swampy, 3 average, 4 dry.
+    environmenttype: int = 3
+    voltage_family: str = '7200'
+    ampacity_env: AmpacityEnvironment = None
+
+    def __post_init__(self):
+        self.path = Path(self.project_dir)
+        if not isinstance(self.frequency, numbers.Real) or self.frequency <= 0:
+            raise ValueError(
+                f'frequency must be a positive number, got {self.frequency!r}')
+        if self.environmenttype not in _SOIL_DE:
+            raise ValueError(
+                f'environmenttype must be one of {sorted(_SOIL_DE)}, '
+                f'got {self.environmenttype!r}')
+        if self.voltage_family not in _CONSTRUCTION_FAMILIES:
+            raise ValueError(
+                f'Unknown voltage family {self.voltage_family!r}, '
+                f'expected one of {sorted(_CONSTRUCTION_FAMILIES)}')
+        if self.ampacity_env is None:
+            self.ampacity_env = AmpacityEnvironment()
+
+
+def _require_columns(df, columns, source):
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise MissingColumnError(f'{source} is missing required columns: {missing}')
+
+
+def _empty_indexed_frame(columns):
+    index = pd.MultiIndex(levels=[[], [], []], codes=[[], [], []],
+                           names=_INDEX)
+    return pd.DataFrame(index=index, columns=columns)
+
+
+class faultCalculationClass:
+    """Impedance, ampacity, fault and voltage-drop calculation engine."""
+
+    def __init__(self, config=None):
+        self.Amat, self.Ainv, self.compd, self.compy = dfn.generate_transforms()
+        self.conductordb = dfn.generate_conductor_database()
         self.distxfmr = dct.distxfmr
-        
-        #xr ratio curve from GE manual MW,XR)
         self.xrcurve = dct.xrcurve
+        self.constructions = dfn.generate_pole_construction()
 
+        self.cfg = config
+        if config is not None:
+            if not isinstance(config, PowerCalcConfig):
+                raise TypeError(
+                    f'faultCalculationClass requires a PowerCalcConfig, '
+                    f'got {type(config).__name__}')
+            family = self.cfg.voltage_family
+            self._family_tables = [self.constructions[key]
+                                   for key in _CONSTRUCTION_FAMILIES[family]
+                                   if key in self.constructions]
+            if not self._family_tables:
+                raise MissingColumnError(
+                    f'No construction tables found for family {family!r}')
+            self.poledb = _empty_indexed_frame(list(_INDEX))
+            self.conddb = _empty_indexed_frame(list(_INDEX))
+        else:
+            self._family_tables = []
+            self.poledb = _empty_indexed_frame(list(_INDEX))
+            self.conddb = _empty_indexed_frame(list(_INDEX))
+
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
+    def _load_databases(self):
+        cfg = self.cfg
+        for name in ('poledb', 'conddb'):
+            path = cfg.path / f'{name}.csv'
+            if not path.is_file():
+                raise FileNotFoundError(f'Required input file not found: {path}')
+        for name in ('poledb', 'conddb'):
+            frame = pd.read_csv(cfg.path / f'{name}.csv',
+                                dtype={'StudyPoleTag': str, 'PoleTag': str})
+            _require_columns(frame, _INDEX, f'{name}.csv')
+            setattr(self, name, frame.set_index(_INDEX).sort_index())
+
+    # ------------------------------------------------------------------
+    # Conductor ampacity (IEEE 738-style heat balance)
+    # ------------------------------------------------------------------
     def calcCurrent(self):
+        """Populate resistance (OhmsCalc, ohms/mile at operating
+        temperature) and ampacity (CurrentCalc, amps) on conddb."""
+        env = self.cfg.ampacity_env
+        if env is None:
+            env = self.ampacity_env = AmpacityEnvironment()
 
-    	#windval of 2 typically covers most bad conditions, could be turned into an argument to be changed
-        windval=2
-    	#most evaluations should be taken at the hottest point of the day, as that would produce the most stress, intensity of 96 provides a reasonable case
-        sunintensity=96
-    	#altitude of 90 would be directly above conductor
-        sunaltitude=90
-    	#azimuth only affects the conductor if the altitude is something other then 90 degrees
-        sunazimuth=0
-    	#conductor azimuth would only come into play if the altitude were something other then 90 and the sun azimuth may come into play as well
-        condazimuth=0
-    	#This is the altitude of the conductor above sea level
-        altitude=1000
-        
-        try:
-            self.conddb.columns.get_loc('TAmb')
-        except KeyError:
-            self.conddb=self.conddb.assign(TAmb=25)
-        
-        try:
-            self.conddb.columns.get_loc('TRise')
-        except KeyError:
-            self.conddb=self.conddb.assign(TRise=50)
-        
-        try:
-            self.conddb.columns.get_loc('GMR')
-        except KeyError:
-            self.conddb=self.conddb.assign(GMR=np.NaN)
-        try:
-            self.conddb.columns.get_loc('DCOhmsCalc')
-        except KeyError:
-            self.conddb=self.conddb.assign(DCOhmsCalc=np.NaN)
-        try:
-            self.conddb.columns.get_loc('ACOhmsCalc')
-        except KeyError:
-            self.conddb=self.conddb.assign(ACOhmsCalc=np.NaN)
-        try:
-            self.conddb.columns.get_loc('GMRCalc')
-        except KeyError:
-            self.conddb=self.conddb.assign(GMRCalc=np.NaN)
-        try:
-            self.conddb.columns.get_loc('OhmsCalc')
-        except KeyError:
-            self.conddb=self.conddb.assign(OhmsCalc=np.NaN)
-        try:
-            self.conddb.columns.get_loc('CurrentCalc')
-        except KeyError:
-            self.conddb=self.conddb.assign(CurrentCalc=np.NaN)
-        
-        for polenum in range(0, len(self.conddb.index)):
-            pl1 = self.conductordb.loc[(self.conductordb.index.get_level_values(0)==self.conddb.iat[polenum,self.conddb.columns.get_loc('ConductorType')]) & (self.conductordb.name==self.conddb.iat[polenum,self.conddb.columns.get_loc('ConductorName')])]
-            gmrval=pl1.iat[0,pl1.columns.get_loc('gmr')]
-            dcohmval=pl1.iat[0,pl1.columns.get_loc('DCohms')]
-            acohmval=pl1.iat[0,pl1.columns.get_loc('ACohms')]
-            tempamb=self.conddb.iat[polenum,self.conddb.columns.get_loc('TAmb')]
-            temprise=self.conddb.iat[polenum,self.conddb.columns.get_loc('TRise')]
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('GMR')]=gmrval
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('DCOhmsCalc')]=dcohmval
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('ACOhmsCalc')]=acohmval
-            
-            if self.conddb.iat[polenum,self.conddb.columns.get_loc('ConductorType')]=='Copper':
-                conductortype=1
-            elif self.conddb.iat[polenum,self.conddb.columns.get_loc('ConductorType')]=='ACCC':
-                conductortype=2
-            else:
-                conductortype=3
-        
-        	#DC resistance per foot
-            resdc=dcohmval/1000
-        	#AC resistance per foot
-            resac=acohmval/1000
-            #radius in inches
-            radius=gmrval*12
-            #area of the wire in ft
-            surfaceareaft=2*np.pi*gmrval
-            #area of the wire for 12 inches
-            surfaceareain=2*np.pi*radius*12
-            #Temperature of the Conductor
-            tempcond=temprise+tempamb
-            #Temperature Ratio
-            tf=(tempcond+tempamb)/2
-            #air density at tf, lb/ft3
-            pf=(0.080695-(0.000002901*altitude)+(0.000000000037*altitude**2))/(1+0.00367*tf)
-            #absolute viscosity of air at tf, lb/h-ft
-            uf=0.0415+0.00012034*tf-0.00000011442*tf**2+0.00000000019416*tf**3
-            #thermal conductivity of air at tf, W/ft2/C
-            kf=0.007388+0.0000227889*tf-0.00000000134328*tf**2
-            #radiated heat loss, W/ft
-            wr=0.138*radius*2*0.5*(((273+tempcond)/100.0)**4-((273+tempamb)/100.0)**4)
-            #convected heat loss, W/ft
-            if windval<=0:
-                wc=0.283*np.sqrt(pf)*(radius*2)**0.75*(temprise)**1.25
-            else:
-                wc1=(1.01+0.371*((pf*windval*60*60*radius*2)/uf)**0.52)*kf*(temprise)
-                wc2=(0.1695*((pf*windval*60*60*radius*2)/uf)**0.6)*kf*(temprise)
-                wc=max(wc1,wc2)
-            #Angle of the Sun in radians
-            angle=(sunaltitude*np.pi/180)
-            #Solar Heat Gain, W/ft
-            ws=0.5*sunintensity*np.sin(np.arccos(np.cos(angle)*np.cos((sunazimuth*np.pi/180)-(condazimuth*np.pi/180))))*surfaceareaft
-            #Maximum Solar Heat Gain, W/ft
-            wsbase=0.5*100*np.sin(90*np.pi/180)*surfaceareaft
-            #Losses in W/in2-ft
-            powerloss=(wc+wr)/surfaceareain
-            #Conductor Resistance Calculations
-            if conductortype==2:
-                resac=resdc+((resac-resdc)/(75-25))*(tempcond-25)
-            elif conductortype==1:
-                resdctemp=resdc*(1+0.00381*((75)-20))
-                resacdc=resac/resdctemp
-                resdc=resdc*(1+0.00381*(75-20))
-                resac=resdc*resacdc
-            else:
-                resdctemp=resdc*(1+0.00403*(75-20))
-                resacdc=resac/resdctemp
-                resdc=resdc*(1+0.00403*((tempamb+temprise)-20))
-                resac=resdc*resacdc
-            ohmval=(resac*5280)
-            #Calculates the base current before accounting for sun and wind
-            currentbase=np.sqrt((37.7*radius*2*powerloss)/resac)
-            if ws==0:
-                current=currentbase
-            else:
-                if windval>0:
-                    current=currentbase*(0.99-((0.05*radius*2)*(ws/wsbase)))
-                else:
-                    current=currentbase*(0.99-(0.07*(angle/(np.pi/2)))-((0.05*radius*2)*(ws/wsbase)))
-    
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('GMRCalc')]=gmrval
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('OhmsCalc')]=ohmval
-            self.conddb.iat[polenum,self.conddb.columns.get_loc('CurrentCalc')]=current
-    
-    def calcImpedance(self,environmenttype,f):
-        
-        self.towerCalc()
-        
-        try:
-            self.poledb.columns.get_loc('Span')
-        except KeyError:
-            self.poledb=self.poledb.assign(Span=np.NaN)
-        
-        try:
-            self.conddb.columns.get_loc('Span')
-        except KeyError:
-            self.conddb=self.conddb.assign(Span=np.NaN)
-        
-        for polenum in range(0, len(self.poledb.index)):
-            if tfn.testPositiveFloat(self.poledb.iat[polenum,self.poledb.columns.get_loc('Span')])==False:
-                if self.poledb.index.values[polenum][2] == 0:
-                    refx=self.poledb.iat[polenum,self.poledb.columns.get_loc('MapX')]
-                    refy=self.poledb.iat[polenum,self.poledb.columns.get_loc('MapY')]
-                normx=self.poledb.iat[polenum,self.poledb.columns.get_loc('MapX')]-refx
-                normy=self.poledb.iat[polenum,self.poledb.columns.get_loc('MapY')]-refy
-                
-                if self.poledb.index.values[polenum][2] > 0:
-                    span=np.sqrt(normx*normx+normy*normy)
-                    self.poledb.iat[polenum,self.poledb.columns.get_loc('Span')]=span
-            #Adjust Span from feet to miles
-            self.poledb.iat[polenum,self.poledb.columns.get_loc('Span')]=self.poledb.iat[polenum,self.poledb.columns.get_loc('Span')]/5280
-        
-        for polenum in range(0, len(self.conddb.index)):
-            #Check to see if there is a valid entry in the Conductor Span, if not use the SPan data from the Pole List
-            if tfn.testPositiveFloat(self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')])==False:
-                self.conddb.iat[polenum,self.conddb.columns.get_loc('Span')]=self.poledb.loc[(self.conddb.index[polenum][0],self.conddb.index[polenum][1]),'Span'].iat[0]
-        
-        self.conddb=self.conddb.assign(Z0real=np.NaN,Z0imag=np.NaN,Z1real=np.NaN,Z1imag=np.NaN)
-        
-        for polein in self.conddb.index:
-            if polein[2]==0:
-                pl1=self.conddb.loc[polein[0]]
-                linetype=pl1.at[(polein[1],0),'LineType']
-                w = 2.0224e-3
-                resd = 1.588e-3*f
-                #Soil Type (wet-1,swampy-2,average-3,dry-4)
-                if environmenttype==1:
-                    De=27.9
-                elif environmenttype==2:
-                    De=882
-                elif environmenttype==3:
-                    De=2790
-                else:
-                    De=8820
-                #Check to see phase configuration (determined by tower)
-                if linetype==3:
-                    f1=0.33
-                    f2=0.33
-                    f3=0.33
-                    fmat=np.mat([[f1,f2,f3],
-                                 [f3,f1,f2],
-                                 [f2,f3,f1]])
-                    zsa=pl1.loc[(polein[1],0),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],0),'GMRCalc'])
-                    zsb=pl1.loc[(polein[1],1),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],1),'GMRCalc'])
-                    zsc=pl1.loc[(polein[1],2),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.loc[(polein[1],2),'GMRCalc'])
-                    zk=resd+1j*w*f*np.mat([np.log(De/pl1.loc[(polein[1],0),'AB']),np.log(De/pl1.loc[(polein[1],0),'BC']),np.log(De/pl1.loc[(polein[1],0),'CA'])])*fmat
-                    zabc=np.mat([[zsa, zk[0,0], zk[0,2]], [zk[0,0], zsb, zk[0,1]], [zk[0,2], zk[0,1], zsc]])
-                    
-    #                if neutral>1:
-    #                    zsn=np.mat([[pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],3),pl1.columns.get_loc('GMRCalc')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')])],
-    #                                [resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('NN2')]),pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.at[(polein[0],polein[1],4),pl1.columns.get_loc('GMRCalc')])]])
-    #                    zkn=np.mat([[resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('AN')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('BN')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('CN')])],
-    #                                [resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('AN2')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('BN2')]),resd+1j*w*f*np.log(De/self.conddb.iat[polenum,self.conddb.columns.get_loc('CN2')])]])
-    #                    zabc=zabc-zkn.T*zsn.I*zkn
-    #                    
-    #                else:
-                    zsn=pl1.at[(polein[1],3),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],3),'GMRCalc'])
-                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'BN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'CN'])])
-                    zabc=zabc-zkn.T*(1.0/zsn)*zkn
-                    #print(zabc)
-                elif linetype==2:
-                    f1=.5
-                    f2=.5
-                    fmat=np.mat([[f1,f2,0],
-                                  [f2,f1,0],
-                                  [0,0,0]])
-                    zsa=pl1.at[(polein[1],0),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'GMRCalc'])
-                    zsb=pl1.at[(polein[1],1),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],1),'GMRCalc'])
-                    
-                    zk=resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AB'])*fmat
-                    
-                    zabc=np.mat([[zsa,zk[0,0],0],[zk[0,0],zsb,0],[0,0,0]])
-    
-                    zsn=pl1.at[(polein[1],2),'OhmsCalc']+resd+1j*w*f*np.log(De/pl1.at[(polein[1],2),'GMRCalc'])
-                    zkn=np.mat([resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'AN']),resd+1j*w*f*np.log(De/pl1.at[(polein[1],0),'BN']),0])
-                    zabc=zabc-zkn.T*(1.0/zsn)*zkn
-                else:
-                    zsa=pl1.iat[0,pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.iat[0,pl1.columns.get_loc('GMRCalc')])
-                    zabc=np.mat([[zsa,0,0],[0,0,0],[0,0,0]])
-    
-                    zsn=pl1.iat[0,pl1.columns.get_loc('OhmsCalc')]+resd+1j*w*f*np.log(De/pl1.iat[0,pl1.columns.get_loc('GMRCalc')])
-                    zkn=resd+1j*w*f*np.log(De/1)#pl1.iat[0,pl1.columns.get_loc('AN')])
-                    zabc[0,0]=zsn-(zkn*zkn)/zsn
-                #Multiple Zabc matrix by line length
-                zabc = zabc*pl1.iat[0,pl1.columns.get_loc('Span')]
-                #Perform the transformation on Zabc to obtain the sequence impedance matrix Z012
-                z012 = self.Ainv*zabc*self.Amat
-                #print(z012)
-                #Compute the zero sequence impedance
-                z0=z012[0,0]+z012[0,1]+z012[0,2]
-                #Compute the positive sequence impedance
-                z1=z012[1,0]+z012[1,1]+z012[1,2]
-                #zmatrix=np.array([[z1.real,z1.imag],
-                #                [z0.real,z0.imag]])
-                self.conddb.at[polein,'Z1real']=z1.real
-                self.conddb.at[polein,'Z1imag']=z1.imag
-                self.conddb.at[polein,'Z0real']=z0.real
-                self.conddb.at[polein,'Z0imag']=z0.imag
-    
+        conddb = self.conddb
+        _require_columns(conddb, ('ConductorType', 'ConductorName'),
+                         'conddb.csv')
+        for column, default in (('TAmb', 25.0), ('TRise', 50.0),
+                                ('GMR', np.nan), ('DCOhmsCalc', np.nan),
+                                ('ACOhmsCalc', np.nan), ('GMRCalc', np.nan),
+                                ('OhmsCalc', np.nan), ('CurrentCalc', np.nan)):
+            if column not in conddb.columns:
+                conddb[column] = default
+        conddb[['TAmb', 'TRise']] = conddb[['TAmb', 'TRise']].astype(float)
+
+        params = ['gmr', 'DCohms', 'ACohms']
+        for row_index, row in conddb.iterrows():
+            pl1 = self._lookup_product(self.conductordb, row['ConductorType'],
+                                        row['ConductorName'], row_index)
+            values = {p: pl1.at[pl1.index[0], p] for p in params
+                      if p in pl1.columns}
+            if 'gmr' not in values or 'DCohms' not in values or 'ACohms' not in values:
+                raise UnknownConductorError(
+                    f'Conductor database lacks GMR/DCohms/ACohms for '
+                    f'{row["ConductorType"]}/{row["ConductorName"]!r} '
+                    f'(row {row_index})')
+            gmrval = float(values['gmr'])
+            dcohmval = float(values['DCohms'])
+            acohmval = float(values['ACohms'])
+
+            conddb.at[row_index, 'GMR'] = gmrval
+            conddb.at[row_index, 'DCOhmsCalc'] = dcohmval
+            conddb.at[row_index, 'ACOhmsCalc'] = acohmval
+            current, ohmval = self._conductor_ampacity(
+                gmrval, dcohmval, acohmval, row['ConductorType'],
+                float(row['TAmb']), float(row['TRise']), env)
+            conddb.at[row_index, 'GMRCalc'] = gmrval
+            conddb.at[row_index, 'OhmsCalc'] = ohmval
+            conddb.at[row_index, 'CurrentCalc'] = current
+        return conddb
+
+    def _conductor_ampacity(self, gmrval, dcohmval, acohmval, conductortype,
+                            tempamb, temprise, env):
+        """IEEE 738-style heat balance for one conductor. Returns
+        (ampacity, ac resistance ohms/mile at operating temperature)."""
+        result = calculate_conductor_ampacity(
+            gmr_ft=gmrval,
+            dcohm_per_kft=dcohmval,
+            acohm_per_kft=acohmval,
+            conductor_type=conductortype,
+            temp_amb_c=tempamb,
+            temp_rise_c=temprise,
+            env=env,
+        )
+        return result.ampacity_amps, result.r_ac_ohms_per_mile
+
+    def _lookup_product(self, product_db, conductor_type, conductor_name,
+                        row_index):
+        pl1 = product_db.loc[product_db.index.get_level_values(0) == conductor_type]
+        match = pl1[pl1['name'] == conductor_name]
+        if match.empty:
+            raise UnknownConductorError(
+                f'Conductor {conductor_type}/{conductor_name!r} not found '
+                f'in product database (row {row_index})')
+        return match
+
+    # ------------------------------------------------------------------
+    # Line geometry
+    # ------------------------------------------------------------------
     def towerCalc(self):
-        
+        """Resolve each study-pole row's assembly and compute phase-pair
+        and phase-neutral horizontal spacing (ft) from construction
+        geometry. Sets LineType (1/2/3 phases) and AB/BC/CA/AN/BN/CN."""
+        conddb = self.conddb
+        for column in ('LineType', 'AB', 'BC', 'CA', 'AN', 'BN', 'CN'):
+            if column not in conddb.columns:
+                conddb[column] = np.nan
+
+        for polein in conddb.index:
+            if polein[2] != 0:
+                continue
+            assembly = conddb.at[polein, 'Assembly']
+            if pd.isna(assembly):
+                raise InvalidGeometryError(
+                    f'Study pole row {polein} has no Assembly value')
+            asm = self._find_assembly(str(assembly))
+            line_type = _phases_from_table(asm)
+            conddb.at[polein, 'LineType'] = line_type
+            if line_type == 3:
+                pairs = (('AB', 'Phase1', 'Phase2'), ('BC', 'Phase2', 'Phase3'),
+                         ('CA', 'Phase3', 'Phase1'))
+            elif line_type == 2:
+                pairs = (('AB', 'Phase1', 'Phase2'),)
+            else:
+                pairs = ()
+            pairs += tuple((f'{letter}N', p, 'Neutral')
+                           for letter, p in zip('ABC',
+                                               _phase_slots(line_type)))
+            for column, a, b in pairs:
+                conddb.at[polein, column] = _center_distance_ft(asm, a, b)
+        return conddb
+
+    def _find_assembly(self, name):
+        name = str(name).strip()
+        matches = []
+        for table in self._family_tables:
+            if 'Name' not in table.columns:
+                continue
+            match = table.loc[table['Name'] == name]
+            if match.empty:
+                match = table.loc[table['Name'].str.contains(name, na=False)]
+            if match.empty and 'AltName' in table.columns:
+                match = table.loc[table['AltName'] == name]
+            if match.empty and 'AltName' in table.columns:
+                match = table.loc[table['AltName'].str.contains(
+                    name, na=False)]
+            if not match.empty:
+                matches.append(match.iloc[0])
+        if not matches:
+            raise UnknownAssemblyError(
+                f'Assembly {name!r} not found in construction family '
+                f'{self.cfg.voltage_family!r}')
+        if len(matches) > 1:
+            found_in = [m['Name'] for m in matches]
+            raise UnknownAssemblyError(
+                f'Assembly {name!r} is ambiguous in family '
+                f'{self.cfg.voltage_family!r}: matched {found_in}')
+        return matches[0]
+
+    # ------------------------------------------------------------------
+    # Spans
+    # ------------------------------------------------------------------
+    def _calc_spans(self):
+        poledb = self.poledb
+        conddb = self.conddb
+        if 'Span' not in poledb.columns:
+            poledb['Span'] = np.nan
+        if 'Span' not in conddb.columns:
+            conddb['Span'] = np.nan
+        # Integer span columns cannot hold the mile-converted floats.
+        poledb['Span'] = poledb['Span'].astype(float)
+        conddb['Span'] = conddb['Span'].astype(float)
+        _require_columns(poledb, ('MapX', 'MapY'), 'poledb.csv')
+
+        refx = refy = None
+        for pole in poledb.index:
+            pole_row = poledb.loc[pole]
+            span = pole_row['Span']
+            if not tfn.testPositiveFloat(span):
+                if pole[2] == 0:
+                    refx = pole_row['MapX']
+                    refy = pole_row['MapY']
+                normx = pole_row['MapX'] - refx
+                normy = pole_row['MapY'] - refy
+                if pole[2] > 0:
+                    span = float(np.sqrt(normx ** 2 + normy ** 2))
+                    poledb.at[pole, 'Span'] = span
+            # Convert feet to miles.
+            poledb.at[pole, 'Span'] = (span if tfn.testPositiveFloat(span)
+                                       else 0.0) / 5280.0
+
+        for polein in conddb.index:
+            span = conddb.at[polein, 'Span']
+            if tfn.testPositiveFloat(span):
+                # Explicit conductor spans are in feet, matching poledb.
+                conddb.at[polein, 'Span'] = span / 5280.0
+            else:
+                conddb.at[polein, 'Span'] = poledb.loc[
+                    (polein[0], polein[1]), 'Span'].iloc[0]
+        return poledb, conddb
+
+    # ------------------------------------------------------------------
+    # Phase impedance
+    # ------------------------------------------------------------------
+    def calcImpedance(self):
+        """Compute phase impedance (Z0/Z1, ohms) for each study-pole
+        section using Carson's equations with Kron reduction. Requires
+        calcCurrent() results on conddb."""
+        f = self.cfg.frequency
         try:
-            self.conddb.columns.get_loc('LineType')
+            De = _SOIL_DE[self.cfg.environmenttype]
         except KeyError:
-            self.conddb=self.conddb.assign(LineType=np.NaN)
-        try:
-            self.conddb.columns.get_loc('AB')
-        except KeyError:
-            self.conddb=self.conddb.assign(AB=np.NaN)
-        try:
-            self.conddb.columns.get_loc('BC')
-        except KeyError:
-            self.conddb=self.conddb.assign(BC=np.NaN)
-        try:
-            self.conddb.columns.get_loc('CA')
-        except KeyError:
-            self.conddb=self.conddb.assign(CA=np.NaN)
-        try:
-            self.conddb.columns.get_loc('AN')
-        except KeyError:
-            self.conddb=self.conddb.assign(AN=np.NaN)
-        try:
-            self.conddb.columns.get_loc('BN')
-        except KeyError:
-            self.conddb=self.conddb.assign(BN=np.NaN)
-        try:
-            self.conddb.columns.get_loc('CN')
-        except KeyError:
-            self.conddb=self.conddb.assign(CN=np.NaN)
-            
-        for polenum in self.conddb.index:
-            if polenum[2]==0:
-                test=self.conddb.at[polenum,'Assembly']
-                if pd.isna(test)==False:
-                    if re.findall(r"(^A)",test):
-                        asm=self.Acon.loc[self.Acon.Name == test]
-                        if asm.empty==True:
-                            asm=self.Acon[self.Acon.Name.str.contains(test, na=False)]
-                            if asm.empty==True:
-                                asm=self.Acon.loc[self.Acon.AltName == test]
-                                if asm.empty==True:
-                                    asm=self.Acon[self.Acon.AltName.str.contains(test, na=False)]
-                        if asm.empty==False:
-                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
-                        self.conddb.at[polenum,'LineType']=1
-                                
-                    elif re.findall(r"(^B)",test):
-                        asm=self.Bcon.loc[self.Bcon.Name == test]
-                        if asm.empty==True:
-                            asm=self.Bcon[self.Bcon.Name.str.contains(test, na=False)]
-                            if asm.empty==True:
-                                asm=self.Bcon.loc[self.Bcon.Name == test]
-                                if asm.empty==True:
-                                    asm=self.Bcon[self.Bcon.AltName.str.contains(test, na=False)]
-                        if asm.empty==False:
-                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
-                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
-                            self.conddb.at[polenum,'AB']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'BN']=np.sqrt(sqrtx+sqrty)/12
-                        self.conddb.at[polenum,'LineType']=2
-                    elif re.findall(r"(^C)",test):
-                        asm=self.Ccon.loc[self.Ccon.Name == test]
-                        if asm.empty==True:
-                            asm=self.Ccon[self.Ccon.Name.str.contains(test, na=False)]
-                            if asm.empty==True:
-                                asm=self.Ccon.loc[self.Ccon.AltName == test]
-                                if asm.empty==True:
-                                    asm=self.Ccon[self.Ccon.AltName.str.contains(test, na=False)]
-                        if asm.empty==False:
-                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'Phase2X'])
-                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'Phase2Hin'])
-                            self.conddb.at[polenum,'AB']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'Phase3X'])
-                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'Phase3Hin'])
-                            self.conddb.at[polenum,'BC']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'Phase1X'])
-                            sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'Phase1Hin'])
-                            self.conddb.at[polenum,'CA']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase1X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase1Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'AN']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase2X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase2Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'BN']=np.sqrt(sqrtx+sqrty)/12
-                            sqrtx=(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])*(asm.at[asm.index[0],'Phase3X']+asm.at[asm.index[0],'NeutralX'])
-                            sqrty=(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])*(asm.at[asm.index[0],'Phase3Hin']+asm.at[asm.index[0],'NeutralHin'])
-                            self.conddb.at[polenum,'CN']=np.sqrt(sqrtx+sqrty)/12
-                        self.conddb.at[polenum,'LineType']=3
-    
-    def ifault(self,zlt,vf,zgnd,zfault,matreturn):
-        """
-        ifault\n
+            raise ValueError(
+                f'environmenttype must be one of {sorted(_SOIL_DE)}, '
+                f'got {self.cfg.environmenttype!r}')
+        w = _W60
+        resd = _RESD60 * (f / 60.0)
+        # NOTE: the reactance term below uses the 60 Hz coefficient (w)
+        # directly; scale for other frequencies in POWERCAD_AUDIT.md (item A2).
+
+        self.towerCalc()
+        self._calc_spans()
+
+        conddb = self.conddb
+        for column in ('Z0real', 'Z0imag', 'Z1real', 'Z1imag'):
+            if column not in conddb.columns:
+                conddb[column] = np.nan
+
+        for polein in conddb.index:
+            if polein[2] != 0:
+                continue
+            pl1 = conddb.loc[polein[0]]
+            linetype = pl1.at[(polein[1], 0), 'LineType']
+            if pd.isna(linetype):
+                raise InvalidGeometryError(
+                    f'LineType unresolved for study pole row {polein}')
+            if linetype == 3:
+                f1 = f2 = f3 = 0.33
+                fmat = np.asmatrix([[f1, f2, f3],
+                                    [f3, f1, f2],
+                                    [f2, f3, f1]])
+                zs = [pl1.at[(polein[1], i), 'OhmsCalc'] + resd
+                      + 1j * w * f * np.log(De
+                                            / pl1.at[(polein[1], i), 'GMRCalc'])
+                      for i in range(3)]
+                zk = (resd + 1j * w * f
+                      * np.asmatrix([np.log(De / pl1.at[(polein[1], 0), 'AB']),
+                                     np.log(De / pl1.at[(polein[1], 0), 'BC']),
+                                     np.log(De / pl1.at[(polein[1], 0), 'CA'])])
+                      * fmat)
+                zabc = np.asmatrix([[zs[0], zk[0, 0], zk[0, 2]],
+                                    [zk[0, 0], zs[1], zk[0, 1]],
+                                    [zk[0, 2], zk[0, 1], zs[2]]])
+                zsn = (pl1.at[(polein[1], 3), 'OhmsCalc'] + resd
+                       + 1j * w * f * np.log(De
+                                             / pl1.at[(polein[1], 3), 'GMRCalc']))
+                zkn = np.asmatrix(
+                    [resd + 1j * w * f * np.log(De / pl1.at[(polein[1], 0), 'AN']),
+                     resd + 1j * w * f * np.log(De / pl1.at[(polein[1], 0), 'BN']),
+                     resd + 1j * w * f * np.log(De / pl1.at[(polein[1], 0), 'CN'])])
+                zabc = zabc - zkn.T * (1.0 / zsn) * zkn
+            elif linetype == 2:
+                f1 = f2 = 0.5
+                fmat = np.asmatrix([[f1, f2, 0],
+                                    [f2, f1, 0],
+                                    [0, 0, 0]])
+                zsa = (pl1.at[(polein[1], 0), 'OhmsCalc'] + resd
+                       + 1j * w * f * np.log(De
+                                             / pl1.at[(polein[1], 0), 'GMRCalc']))
+                zsb = (pl1.at[(polein[1], 1), 'OhmsCalc'] + resd
+                       + 1j * w * f * np.log(De
+                                             / pl1.at[(polein[1], 1), 'GMRCalc']))
+                zk = resd + 1j * w * f * np.log(De
+                                                / pl1.at[(polein[1], 0), 'AB']) * fmat
+                zabc = np.asmatrix([[zsa, zk[0, 0], 0],
+                                    [zk[0, 0], zsb, 0],
+                                    [0, 0, 0]])
+                zsn = (pl1.at[(polein[1], 2), 'OhmsCalc'] + resd
+                       + 1j * w * f * np.log(De
+                                             / pl1.at[(polein[1], 2), 'GMRCalc']))
+                zkn = np.asmatrix(
+                    [resd + 1j * w * f * np.log(De / pl1.at[(polein[1], 0), 'AN']),
+                     resd + 1j * w * f * np.log(De / pl1.at[(polein[1], 0), 'BN']),
+                     0.0])
+                zabc = zabc - zkn.T * (1.0 / zsn) * zkn
+            else:
+                zsa = (pl1.at[(polein[1], 0), 'OhmsCalc'] + resd
+                       + 1j * w * f * np.log(De
+                                             / pl1.at[(polein[1], 0), 'GMRCalc']))
+                zabc = np.asmatrix([[zsa, 0, 0], [0, 0, 0], [0, 0, 0]])
+                zsn = zsa
+                zkn = resd + 1j * w * f * np.log(De / 1.0)
+                zabc[0, 0] = zsn - (zkn * zkn) / zsn
+            zabc = zabc * pl1.at[(polein[1], 0), 'Span']
+            z012 = self.Ainv * zabc * self.Amat
+            z0 = z012[0, 0] + z012[0, 1] + z012[0, 2]
+            z1 = z012[1, 0] + z012[1, 1] + z012[1, 2]
+            conddb.at[polein, 'Z1real'] = z1.real
+            conddb.at[polein, 'Z1imag'] = z1.imag
+            conddb.at[polein, 'Z0real'] = z0.real
+            conddb.at[polein, 'Z0imag'] = z0.imag
+        return conddb
+
+    # ------------------------------------------------------------------
+    # Fault calculations (symmetrical components)
+    # ------------------------------------------------------------------
+    def ifault(self, zlt, vf, zgnd, zfault, matreturn):
+        """ifault\n
         \n
         zlt - impedance in pu, np.array complex format [[r1+x1j],[r0+x0j]]
         vf - voltage in pu, float
@@ -403,231 +454,225 @@ class faultCalculationClass():
             4 I012 matrix yd viewed from Y
             5 I012 matrix
         """
-        zt=zlt[0,0]
-        z0t=zlt[1,0]
-        #*********************************************************************#
-        #Phase to Ground Fault, (A-G)
-        #*********************************************************************#
-        #Generate Phase Current Matrix From Sequence Current Matrix
-        I012=np.array([[(vf/(z0t+zt+zt+zfault+(3*zgnd)))],
-                       [(vf/(z0t+zt+zt+zfault+(3*zgnd)))],
-                       [(vf/(z0t+zt+zt+zfault+(3*zgnd)))]])
-        Iabc=np.dot(self.Amat,I012)
-        Iseq=I012
-        #Generate Results Moving Backwards from a low Wye to High Delta
-        I012d=np.multiply(self.compy,I012)
-        IabcD=np.dot(self.Amat,I012d)
-        IseqD=I012d
-        #Generate Results Moving Backwards from a low Delta to High Wye
-        I012y=np.multiply(self.compd,Iseq)
-        IabcY=np.dot(self.Amat,I012y)
-        IseqY=I012y
-        #*********************************************************************#
-        #Phase to Phase Fault, (BC)
-        #*********************************************************************#
-        #Generate Phase Current Matrix From Sequence Current Matrix
-        I012=np.array([[0],
-        			   [(vf/(zt+zt+(zfault)))],
-        			   [-vf/(zt+zt+(zfault))]])
-        Iabc=np.vstack((Iabc,np.dot(self.Amat,I012)))
-        Iseq=np.vstack((Iseq,I012))
-        #Generate Results Moving Backwards from a low Wye to High Delta
-        I012d=np.multiply(self.compy,I012)
-        IabcD=np.vstack((IabcD,np.dot(self.Amat,I012d)))
-        IseqD=np.vstack((IseqD,I012d))
-        #Generate Results Moving Backwards from a low Delta to High Wye
-        I012y=np.multiply(self.compd,I012)
-        IabcY=np.vstack((IabcY,np.dot(self.Amat,I012y)))
-        IseqY=np.vstack((IseqY,I012y))
-        #*********************************************************************#
-        #Phase to Phase to Ground Fault, (BC-G)
-        #*********************************************************************#
-        #Calculate Positive Sequence Impedance Equation
-        #I1=vf/((zt+zfault)+(((zt+zfault)*(z0t+(3*zgnd)))/(zt+z0t+(3*zgnd))))
-        I1=vf/(zt+(zfault/2)+((zt+(zfault/2))*(z0t+(zfault/2)+(3*zgnd)))/(zt+z0t+zfault+(3*zgnd)))
-        #Generate Phase Current Matrix From Sequence Current Matrix
-        #I012=np.array([[(-I1*((zt+zfault)/(zt+z0t+zfault+(3*zgnd))))],
-        #			   [I1],
-        #			   [(-I1*((z0t+zfault+(3*zgnd))/(zt+z0t+(2*zfault)+(3*zgnd))))]])
-        I012=np.array([[-I1*(z0t/(zt+z0t))],
-        			   [I1],
-        			   [-I1*(zt/(zt+z0t))]])
-        Iabc=np.vstack((Iabc,np.dot(self.Amat,I012)))
-        Iseq=np.vstack((Iseq,I012))
-        #Generate Results Moving Backwards from a low Wye to High Delta
-        I012d=np.multiply(self.compy,I012)
-        IabcD=np.vstack((IabcD,np.dot(self.Amat,I012d)))
-        IseqD=np.vstack((IseqD,I012d))
-        #Generate Results Moving Backwards from a low Delta to High Wye
-        I012y=np.multiply(self.compd,I012)
-        IabcY=np.vstack((IabcY,np.dot(self.Amat,I012y)))
-        IseqY=np.vstack((IseqY,I012y))
-        #*********************************************************************#
-        #Three Phase to Ground Fault
-        #*********************************************************************#
-        #Calculate Positive Sequence Impedance Equation
-        I1=(vf/(zt+zfault+zgnd))
-        I012=np.array([[0],[I1],[0]])
-        Iabc=np.vstack((Iabc,np.dot(self.Amat,I012)))
-        Iseq=np.vstack((Iseq,I012))
-        #Generate Results Moving Backwards from a low Wye to High Delta
-        I012d=np.multiply(self.compy,I012)
-        IabcD=np.vstack((IabcD,np.dot(self.Amat,I012d)))
-        IseqD=np.vstack((IseqD,I012d))
-        #Generate Results Moving Backwards from a low Delta to High Wye
-        I012y=np.multiply(self.compd,I012)
-        IabcY=np.vstack((IabcY,np.dot(self.Amat,I012y)))
-        IseqY=np.vstack((IseqY,I012y))
-        
-        if matreturn==1:
+        zt = zlt[0, 0]
+        z0t = zlt[1, 0]
+        # Phase to ground fault (A-G)
+        I012 = np.array([[(vf / (z0t + zt + zt + zfault + (3 * zgnd)))],
+                         [(vf / (z0t + zt + zt + zfault + (3 * zgnd)))],
+                         [(vf / (z0t + zt + zt + zfault + (3 * zgnd)))]])
+        Iabc = np.dot(self.Amat, I012)
+        Iseq = I012
+        I012d = np.multiply(self.compy, I012)
+        IabcD = np.dot(self.Amat, I012d)
+        IseqD = I012d
+        I012y = np.multiply(self.compd, Iseq)
+        IabcY = np.dot(self.Amat, I012y)
+        IseqY = I012y
+        # Phase to phase fault (BC)
+        I012 = np.array([[0],
+                         [(vf / (zt + zt + (zfault)))],
+                         [-vf / (zt + zt + (zfault))]])
+        Iabc = np.vstack((Iabc, np.dot(self.Amat, I012)))
+        Iseq = np.vstack((Iseq, I012))
+        I012d = np.multiply(self.compy, I012)
+        IabcD = np.vstack((IabcD, np.dot(self.Amat, I012d)))
+        IseqD = np.vstack((IseqD, I012d))
+        I012y = np.multiply(self.compd, I012)
+        IabcY = np.vstack((IabcY, np.dot(self.Amat, I012y)))
+        IseqY = np.vstack((IseqY, I012y))
+        # Phase to phase to ground fault (BC-G)
+        I1 = vf / (zt + (zfault / 2)
+                   + ((zt + (zfault / 2)) * (z0t + (zfault / 2) + (3 * zgnd)))
+                   / (zt + z0t + zfault + (3 * zgnd)))
+        I012 = np.array([[-I1 * (z0t / (zt + z0t))],
+                         [I1],
+                         [-I1 * (zt / (zt + z0t))]])
+        Iabc = np.vstack((Iabc, np.dot(self.Amat, I012)))
+        Iseq = np.vstack((Iseq, I012))
+        I012d = np.multiply(self.compy, I012)
+        IabcD = np.vstack((IabcD, np.dot(self.Amat, I012d)))
+        IseqD = np.vstack((IseqD, I012d))
+        I012y = np.multiply(self.compd, I012)
+        IabcY = np.vstack((IabcY, np.dot(self.Amat, I012y)))
+        IseqY = np.vstack((IseqY, I012y))
+        # Three phase to ground fault
+        I1 = (vf / (zt + zfault + zgnd))
+        I012 = np.array([[0], [I1], [0]])
+        Iabc = np.vstack((Iabc, np.dot(self.Amat, I012)))
+        Iseq = np.vstack((Iseq, I012))
+        I012d = np.multiply(self.compy, I012)
+        IabcD = np.vstack((IabcD, np.dot(self.Amat, I012d)))
+        IseqD = np.vstack((IseqD, I012d))
+        I012y = np.multiply(self.compd, I012)
+        IabcY = np.vstack((IabcY, np.dot(self.Amat, I012y)))
+        IseqY = np.vstack((IseqY, I012y))
+
+        if matreturn == 1:
             return IabcD
-        elif matreturn==2:
+        elif matreturn == 2:
             return IabcY
-        elif matreturn==3:
+        elif matreturn == 3:
             return IseqD
-        elif matreturn==4:
+        elif matreturn == 4:
             return IseqY
-        elif matreturn==5:
+        elif matreturn == 5:
             return Iseq
         else:
             return Iabc
 
-    #xfmr(Transformer Base MVA,
-    #     Transformer Base KV,
-    #     Nameplate Percent Impedance,
-    #     X/R ratio,
-    #     Z1/Z0 ratio)
-    def xfmr(self,MVAbase, Zpercent, XRratio=False, results=False, zeromult=1):
-        """
-        xfmr\n
+    def xfmr(self, MVAbase, Zpercent, XRratio=False, results=False, zeromult=1):
+        """xfmr\n
         \n
         MVAbase - Transformer Base MVA, float
         Zpercent - Percent Impedance, float
         XRratio - Default False (random) or float
-        results - 'rand' or False for random, 'rlow' random low range, 'rhigh' random high range
+        results - 'rand' or False for random, 'rlow' random low range,
+                  'rhigh' random high range
         zeromult - multiplier for zero sequence, float
         """
-        #test to see if XRratio is a positive value
-        if tfn.testPositiveFloat(XRratio)==False:
-            XRratio=self.xrcalc(MVAbase,results)
-        #Calculate Positive Sequence Per Unit Impedance From Percent Impedance and X/R Ratio
-        z1=(Zpercent/100)
-        #Calculate Positive Sequence Resistance From Percent Impedance and X/R Ratio
-        r1=z1/np.sqrt(1+XRratio**2);
-        #Calculate Positive Sequence Reactance From Percent Impedance and X/R Ratio
-        x1=1j*r1*XRratio
-        #Calculate Zero Sequence Resistance
-        r0=r1*zeromult
-        #Calculate Zero Sequence Reactance
-        x0=x1*zeromult
-        #Returns impedance matrix:
-        z1=r1+x1
-        z0=r0+x0
-        return np.array([[z1],[z0]])
-    
-    def xrcalc(self,MVAbase,results):
-        if tfn.testIsString(results)==False:
-            results='rand'
-        
-        if results=='low':
-            if MVAbase>=12:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(2-1.677)
-            elif MVAbase>=2.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(2-1.5)
-            elif MVAbase>=0.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(2-1.3)
+        if tfn.testPositiveFloat(XRratio) == False:
+            XRratio = self.xrcalc(MVAbase, results)
+        z1 = (Zpercent / 100)
+        r1 = z1 / np.sqrt(1 + XRratio ** 2)
+        x1 = 1j * r1 * XRratio
+        r0 = r1 * zeromult
+        x0 = x1 * zeromult
+        z1 = r1 + x1
+        z0 = r0 + x0
+        return np.array([[z1], [z0]])
+
+    def xrcalc(self, MVAbase, results):
+        if tfn.testIsString(results) == False:
+            results = 'rand'
+
+        if results == 'low':
+            if MVAbase >= 12:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (2 - 1.677)
+            elif MVAbase >= 2.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (2 - 1.5)
+            elif MVAbase >= 0.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (2 - 1.3)
             else:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
-        elif results=='high':
-            if MVAbase>=12:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*1.677
-            elif MVAbase>=2.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*1.5
-            elif MVAbase>=0.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*1.3
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
+        elif results == 'high':
+            if MVAbase >= 12:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * 1.677
+            elif MVAbase >= 2.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * 1.5
+            elif MVAbase >= 0.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * 1.3
             else:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
-        elif results=='rlow':
-            if MVAbase>=12:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1-abs(1-ssp.norm.rvs(loc=1,scale=(0.677/3))))
-            elif MVAbase>=2.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1-abs(1-ssp.norm.rvs(loc=1,scale=(0.5/3))))
-            elif MVAbase>=0.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1-abs(1-ssp.norm.rvs(loc=1,scale=(0.3/3))))
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
+        elif results == 'rlow':
+            if MVAbase >= 12:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 - abs(1 - ssp.norm.rvs(loc=1, scale=(0.677 / 3))))
+            elif MVAbase >= 2.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 - abs(1 - ssp.norm.rvs(loc=1, scale=(0.5 / 3))))
+            elif MVAbase >= 0.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 - abs(1 - ssp.norm.rvs(loc=1, scale=(0.3 / 3))))
             else:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
-        elif results=='rhigh':
-            if MVAbase>=12:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1+abs(1-ssp.norm.rvs(loc=1,scale=(0.677/3))))
-            elif MVAbase>=2.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1+abs(1-ssp.norm.rvs(loc=1,scale=(0.5/3))))
-            elif MVAbase>=0.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*(1+abs(1-ssp.norm.rvs(loc=1,scale=(0.3/3))))
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
+        elif results == 'rhigh':
+            if MVAbase >= 12:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 + abs(1 - ssp.norm.rvs(loc=1, scale=(0.677 / 3))))
+            elif MVAbase >= 2.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 + abs(1 - ssp.norm.rvs(loc=1, scale=(0.5 / 3))))
+            elif MVAbase >= 0.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * (1 + abs(1 - ssp.norm.rvs(loc=1, scale=(0.3 / 3))))
             else:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
-        elif results=='rand':
-            if MVAbase>=12:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*ssp.norm.rvs(loc=1,scale=(0.677/3))
-            elif MVAbase>=2.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*ssp.norm.rvs(loc=1,scale=(0.5/3))
-            elif MVAbase>=0.5:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])*ssp.norm.rvs(loc=1,scale=(0.3/3))
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
+        elif results == 'rand':
+            if MVAbase >= 12:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * ssp.norm.rvs(loc=1, scale=(0.677 / 3))
+            elif MVAbase >= 2.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * ssp.norm.rvs(loc=1, scale=(0.5 / 3))
+            elif MVAbase >= 0.5:
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1]) * ssp.norm.rvs(loc=1, scale=(0.3 / 3))
             else:
-                XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
+                XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
         else:
-            XRratio=np.interp(MVAbase,self.xrcurve[:,0],self.xrcurve[:,1])
+            XRratio = np.interp(MVAbase, self.xrcurve[:, 0], self.xrcurve[:, 1])
         return XRratio
-    
-    def abcseq(self,abcmat):
-        seqmat=self.Ainv*abcmat*self.Amat
+
+    def abcseq(self, abcmat):
+        seqmat = self.Ainv * abcmat * self.Amat
         return seqmat
-        
-    def abc2seq(self,abc):
-        seq=np.dot(self.Ainv,abc)
+
+    def abc2seq(self, abc):
+        seq = np.dot(self.Ainv, abc)
         return seq
-        
-    def seq2abc(self,seq):
-        abc=np.dot(self.Amat,seq)
+
+    def seq2abc(self, seq):
+        abc = np.dot(self.Amat, seq)
         return abc
-    
-    def dy1(self,ID):
-        I012=np.dot(self.Ainv,ID)
-        I012Y=np.multiply(self.compy,I012)
-        IY=np.dot(self.Amat,I012Y)   
+
+    def dy1(self, ID):
+        I012 = np.dot(self.Ainv, ID)
+        I012Y = np.multiply(self.compy, I012)
+        IY = np.dot(self.Amat, I012Y)
         return IY
-    
-    def yd1(self,IY):
-        I012=np.dot(self.Ainv,IY)
-        I012D=np.multiply(self.compd,I012)
-        ID=np.dot(self.Amat,I012D)
+
+    def yd1(self, IY):
+        I012 = np.dot(self.Ainv, IY)
+        I012D = np.multiply(self.compd, I012)
+        ID = np.dot(self.Amat, I012D)
         return ID
-    
-    #1=single phase, 2=Center Tapped Service 240/120, 3=Three Phase line to line drop
-    def calcVoltageDrop(self,zt,vs,il,pf,phase):
-        rf=np.sin(np.arccos(pf))
-        vdrop=vs+il*zt[0]*pf+il*zt[1]*rf-np.sqrt(vs**2-(il*zt[1]*pf-il*zt[0]*rf)**2)
-        if phase>2:
-            return vdrop*np.sqrt(3)            
-        elif phase>1:
-            return vdrop*2
+
+    def calcVoltageDrop(self, zt, vs, il, pf, phase):
+        """Approximate voltage drop. zt = (R, X) ohms; phase: 1 = single
+        phase, 2 = center-tapped 240/120 service, 3 = three phase."""
+        rf = np.sin(np.arccos(pf))
+        vdrop = vs + il * zt[0] * pf + il * zt[1] * rf \
+            - np.sqrt(vs ** 2 - (il * zt[1] * pf - il * zt[0] * rf) ** 2)
+        if phase > 2:
+            return vdrop * np.sqrt(3)
+        elif phase > 1:
+            return vdrop * 2
         else:
             return vdrop
 
-    def calcImpedanceLaunch(self,projectdir,projectname,frequency,environmenttype):
-        #self.prepData()
-        self.poledb = pd.read_csv(projectdir+'poledb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
-        self.poledb = self.poledb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
-        self.conddb = pd.read_csv(projectdir+'conddb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
-        self.conddb = self.conddb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
+    # ------------------------------------------------------------------
+    # Entry points
+    # ------------------------------------------------------------------
+    def run(self, out_path=None):
+        """Load project databases, run ampacity and impedance
+        calculations. Writes condfcc.csv to the project directory
+        (or out_path if given) and returns conddb."""
+        self._load_databases()
         self.calcCurrent()
-        self.calcImpedance(environmenttype,frequency)
-        self.conddb.to_csv(projectdir+'condfcc.csv')
-        
-    def calcVoltDropLaunch(self,projectdir,projectname,frequency,environmenttype):
-        #self.prepData()
-        self.poledb = pd.read_csv(projectdir+'poledb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
-        self.poledb = self.poledb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
-        self.conddb = pd.read_csv(projectdir+'conddb.csv',dtype={'StudyPoleTag' : str, 'PoleTag' : str})
-        self.conddb = self.conddb.set_index(['StudyPoleTag','PoleTag','PoleNumber'])
-        self.calcCurrent()
-        self.calcImpedance(environmenttype,frequency)
+        self.calcImpedance()
+        out = Path(out_path) if out_path else self.cfg.path / 'condfcc.csv'
+        self.conddb.to_csv(out)
+        return self.conddb
+
+
+def _phases_from_table(asm):
+    """Infer the number of phases from populated Phase slots."""
+    for n in range(6, 0, -1):
+        if f'Phase{n}Hin' in asm.index and not pd.isna(asm[f'Phase{n}Hin']):
+            return min(n, 3)
+    return 1
+
+
+def _phase_slots(line_type):
+    if line_type >= 3:
+        return ('Phase1', 'Phase2', 'Phase3')
+    if line_type == 2:
+        return ('Phase1', 'Phase2')
+    return ('Phase1',)
+
+
+def _center_distance_ft(asm, a, b):
+    """Distance between the centerline-based attachment points of two
+    conductors, in feet. Construction geometry columns are centerline
+    (z-axis) based with signed X offsets, so the distance is the plain
+    coordinate difference; the pole radius never enters it. Returns NaN
+    when geometry is absent (matching the legacy CSV output)."""
+    columns = (f'{a}X', f'{a}Hin', f'{b}X', f'{b}Hin')
+    missing = [c for c in columns
+               if c not in asm.index or pd.isna(asm[c])]
+    if missing:
+        return np.nan
+    dx = asm[f'{a}X'] - asm[f'{b}X']
+    dy = asm[f'{a}Hin'] - asm[f'{b}Hin']
+    return float(np.sqrt(dx * dx + dy * dy) / 12.0)

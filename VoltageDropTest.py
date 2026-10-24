@@ -19,7 +19,7 @@ zf=np.array([0,
 zg=0
 vf=1.05
 
-fcc=pc.faultCalculationClass()
+fcc=pc.faultCalculationClass(pc.PowerCalcConfig(project_name='faultstudy', project_dir='.'))
 
 projectname='vdrop'
 projectdir='./vdrop/'

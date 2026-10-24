@@ -1,0 +1,5 @@
+StudyPoleTag,PoleTag,PoleNumber,Assembly,AssemblyHeight,ConductorType,ConductorName,Height,Span
+01243,22350,0,C1.11,0.0,ACSR,Merlin,40,0.5
+01243,22350,1,C1.11,0.0,ACSR,Merlin,40,0.5
+01243,22350,2,C1.11,0.0,ACSR,Merlin,40,0.5
+01243,22350,3,C1.11,0.0,ACSR,Penguin,35,0.5
