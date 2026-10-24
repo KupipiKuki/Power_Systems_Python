@@ -335,3 +335,55 @@ Content from PR #3 and `qa/mistral-phase0` verified present (QAQC has improvemen
 
 Full refactor of the unified codebase on `vibe/qaqc-merge-gemini-refactors` before proceeding with GUI effort.
 
+---
+
+# Handoff addendum (session 7): major-refactors branch — plan to address all issues
+
+**Branch:** `major-refactors` (renamed from `vibe/qaqc-merge-gemini-refactors`).
+**State:** User merged to main, then reverted (PR #5). Branch renamed to `major-refactors`.
+**main:** Clean (revert applied). All refactor work lives on `major-refactors` only.
+
+## New documents created
+
+| Document | Purpose |
+|----------|---------|
+| `ISSUES.md` | Consolidated issue tracker — all findings from POWERCAD_AUDIT, DATA_AUDIT, phase0_gemini_audit, HANDOFF. Organized by priority (P0/P1/P2/P3). 21 open + 3 blocked + 13 resolved. |
+| `THEORY_ANALYSIS.md` | Full mathematical theory analysis — symmetrical components, Carson's equations, Kron reduction, fault analysis, transformer impedance, line impedance, ampacity (IEEE 738), voltage drop, pole structural calcs. 8 confirmed bugs, 5 design decisions needed. |
+| `REFACTOR_PLAN.md` | Phased implementation plan — 5 phases from foundation through GUI development. Clear entry/exit criteria per phase. |
+
+## Current state
+
+- **Branch:** `major-refactors` (tracking `origin/major-refactors`)
+- **Tests:** 51 passed + 1 xpassed
+- **Legacy scripts:** All 7 pass
+- **Working tree:** Clean (plan documents pending commit)
+
+## Open decision points (user input needed)
+
+| # | Decision | Options |
+|---|----------|---------|
+| D1 | Single-phase neutral geometry | A) Use CSV data, B) Delegate to overhead_lines, C) Document limitation |
+| D2 | xrcalc 'low' bounds | Symmetric vs current vs custom |
+| D3 | Transformer Z0 default | 1.0 vs 0.85 vs table-driven |
+| D4 | Legacy calcImpedance | Fix in place vs deprecate for overhead_lines |
+| D5 | DATA_AUDIT discrepancies | Fix CSVs vs document as in-house |
+| D6 | New document (expected tomorrow) | Review and incorporate |
+
+## Phase plan summary
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| 0 — Foundation | Baseline + documentation | IN PROGRESS |
+| 1 — Critical Math (P0) | LLG fault, 3PH zgnd, single-phase | NOT STARTED |
+| 2 — High-Priority Math (P1) | Frequency, xrcalc, Copper temp, Vdrop, DATA_AUDIT | NOT STARTED |
+| 3 — Architecture (P2) | Shared lookup, Radius/X wiring, deprecation, golden tests | NOT STARTED |
+| 4 — Documentation (P3) | Calc reference, type hints, audits | NOT STARTED |
+| 5 — GUI | Blocked on Phases 0-4 | NOT STARTED |
+
+## Next actions
+
+1. Commit plan documents (`ISSUES.md`, `THEORY_ANALYSIS.md`, `REFACTOR_PLAN.md`)
+2. Wait for user's new document with further issues
+3. Present decision points D1-D6 to user
+4. Begin Phase 1 — P0-1 (LLG fault divider fix)
+
