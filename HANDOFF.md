@@ -299,3 +299,39 @@ python -m pytest tests/ gui/tests/ tests/golden/ -v
 - All tests run from repo root: `python -m pytest tests/ gui/tests/ tests/golden/ -v`
 - Legacy scripts need `MPLBACKEND=Agg` for headless execution
 
+---
+
+# Handoff addendum (session 6): Branch consolidation — single QAQC branch
+
+**Branch:** `vibe/qaqc-merge-gemini-refactors` — **the single source of truth**.
+**PR:** https://github.com/KupipiKuki/Power_Systems_Python/pull/4 (only open PR)
+
+## What was consolidated
+
+All work from 4 branches merged into one:
+
+| Source Branch | Content | Status |
+|-------------|---------|--------|
+| `vibe/polecad-refactor-c349b2` (PR #1) | polecad refactor, poleplotter, profile_reconstructor, DATA_AUDIT, voltage families | CLOSED — superseded |
+| `vibe/powercad-refactor` (PR #2) | powercad refactor, POWERCAD_AUDIT, bug fixes F1-F5 | CLOSED — superseded |
+| `vibe/gui-impedance` (PR #3) | GUI facade API, Phase 0 audit fixes | CLOSED — superseded |
+| `qa/mistral-phase0` | Golden regression tests, Phase 1 test corpus | Content merged (branch retained) |
+| `gemini/modular-refactor` | overhead_lines, underground_cables, thermal_ampacity, testing merge | Content merged (branch retained) |
+| `testing` | Underground cable calculator | CONTAINED (ancestor) |
+
+## Verification of completeness
+
+All commits from PR #1 and PR #2 verified as ancestors of `vibe/qaqc-merge-gemini-refactors`.
+Content from PR #3 and `qa/mistral-phase0` verified present (QAQC has improvements over originals).
+
+## Current state
+
+- **51 passed + 1 xpassed** automated tests
+- **All 7 legacy scripts pass**
+- Working tree clean
+- Ready for full refactor pass before GUI development
+
+## Next step
+
+Full refactor of the unified codebase on `vibe/qaqc-merge-gemini-refactors` before proceeding with GUI effort.
+
