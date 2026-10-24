@@ -4,26 +4,25 @@ Created on Tue Sep 10 09:46:06 2019
 
 @author: user
 """
-from pc_classes.polecad import PoleCalcConfig, poleCalculationClass
+from pc_classes import polecad as pc
 from pc_classes.pc_functions import dataconstants as dct
+
 
 projectname='Spans'
 projectdir='./PoleCadTests/'+projectname+'/'
 
-config=PoleCalcConfig(
-    project_name=projectname,
-    project_dir=projectdir,
-    design_tension=0.5,
-    strength_factor=0.65,
-    wind_load=4,
-    wind_overload=2.5,
-    tension_overload=1.65,
-    ice_thickness=0.5,
-    wind_angle=dct.eastwind,
-    deflection_factor=1)
+designTension=0.5
+strengthFactor=0.65
+windLoad=4
+windOverload=2.5
+tensionOverload=1.65
+iceThickness=0.5
+windAngle=dct.eastwind
+deflectionFactor=1
 
-pcc=poleCalculationClass(config)
-pcc.run_max_span()
+pcc=pc.poleCalculationClass()
+pcc.spanLaunch(projectname,projectdir,designTension,strengthFactor,windLoad,windOverload,tensionOverload,iceThickness,windAngle,deflectionFactor)
+
 
 #Strength Factors
 #                                          B          C

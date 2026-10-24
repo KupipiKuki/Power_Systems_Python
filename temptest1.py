@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Impedance/ampacity study on the temptest1 project (refactored API)."""
-from pc_classes.powercad import PowerCalcConfig, faultCalculationClass
+"""
+Created on Tue Sep 10 09:46:06 2019
 
-projectname = 'temptest1'
-projectdir = './PowerCadTests/' + projectname + '/'
+@author: user
+"""
+from pc_classes import powercad as pcd
 
-config = PowerCalcConfig(
-    project_name=projectname,
-    project_dir=projectdir,
-    frequency=60,
-    environmenttype=3,
-)
-fcc = faultCalculationClass(config)
-fcc.run()
-print(fcc.xfmr(150, 8, False, 'rand', 1))
+projectname='temptest1'
+projectdir='./PowerCadTests/'+projectname+'/'
+fcc=pcd.faultCalculationClass()
+fcc.calcImpedanceLaunch(projectdir,projectname,60,3)
+print(fcc.xfmr(150,8,False,'rand',1))
