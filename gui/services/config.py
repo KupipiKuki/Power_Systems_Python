@@ -25,6 +25,8 @@ class TransformerConfig:
     percent_z: float
     xr_ratio: Optional[float] = None
     zero_mult: float = 1.0
+    primary_connection: str = "grdy"   # grdy | y | delta
+    secondary_connection: str = "grdy"  # grdy | y | delta
 
     def __post_init__(self):
         if self.mva_base <= 0 or self.percent_z <= 0:
